@@ -684,3 +684,78 @@ cd app && npm install        # the extra engine's packages
 ```
 
 The Resilient Hydro Twin started on CesiumJS and moved to MapLibre when stakeholders said they didn't need 3D. Try one, and decide for yourself.
+
+---
+
+## Extra · deck.gl: the same data as GPU layers → `extra-deck`
+
+**Goal:** another engine. deck.gl draws **data** layers on the GPU; it leaves the basemap to MapLibre. You get 3D sensor columns and a whole city of 3D buildings on a tilted 2D map, with the flood underneath, without a globe.
+
+### What was done
+
+```bash
+cd app
+npm install @deck.gl/core @deck.gl/layers @deck.gl/mapbox
+```
+
+| File | What changed |
+|---|---|
+| `app/src/lib/DeckMap.svelte` | **New.** A MapLibre map, tilted, with the flood rasters; on top, a deck.gl `ColumnLayer` (sensors) and `GeoJsonLayer` (3D buildings) |
+| `app/src/lib/scenario.js` | `BUILDING_HEIGHT_M`: the assumed height of every building; `buildingColour()`: grey if not exposed |
+| `app/static/layers/buildings_all.geojson` | **New.** All 78,045 OpenStreetMap buildings with their flood depth (22 MB; about 3.3 MB compressed, as nginx sends it). The 2D map doesn't need it: its basemap draws the buildings |
+| `app/src/lib/layers.svelte.js`, `LayerPanel.svelte` | The buildings layer is now *Buildings*, with a grey legend entry for the ones that are not exposed |
+| `app/src/routes/deck/+page.svelte` | **New.** The deck.gl page, with the same *Layers* box and time bar as the MapLibre page |
+| `app/src/routes/+layout.svelte` | A **deck.gl** link in the navigation |
+| `app/src/lib/sensors.js` | `columnHeight()`: how tall a column is for a given depth (the Cesium extra uses the same rule) |
+
+### Run it
+
+Same two terminals (or Docker). After `git checkout extra-deck`, run `npm install` in `app/`, then open the **deck.gl** page. Switch on the layers in the *Layers* box. Hover a column or a building for its details; click the ground with a flood layer on for the depth there. Ctrl+drag (or right-drag) to tilt and turn, and zoom in to see the buildings stand up. Leave it running for a minute: when a depth changes, the column **grows or shrinks smoothly** instead of jumping.
+
+### Three ways to say "draw this"
+
+Three engines, three models:
+
+| | MapLibre (step 2) | Cesium (`extra-cesium`) | deck.gl (this extra) |
+|---|---|---|---|
+| Model | Source + **style rules** | One **entity** per object | **Layers**, described again on every change |
+| Colour | `['get', 'colour']`, a rule | `e.cylinder.material = …` per entity | `getFillColor: f => …`, a function |
+| New data | `setData(geojson)` | Update each entity | `new ColumnLayer({ id: 'sensor-columns', data })` |
+| Basemap | Its own (vector tiles) | Its own (globe + imagery) | None: borrows MapLibre's |
+
+deck.gl's model looks wasteful (a new layer object every 10 s?) but it isn't: a layer is only a **description**. deck.gl compares it with the previous one with the same `id`, and only sends what changed to the GPU. That is the same idea as Svelte's: you describe what the screen should look like, the library works out the updates.
+
+### Who draws what?
+
+This page has **two** engines working together:
+
+| Layer | Drawn by | Why |
+|---|---|---|
+| Basemap, street names | MapLibre | deck.gl has no basemap of its own |
+| Flood rasters (max, over time) | MapLibre, with the **same code** as the MapLibre page (`addFloodDepth`, `addFloodTimeseries` in `scenario.js`) | This map *is* a MapLibre map, so it can reuse everything |
+| Sensor columns, 3D buildings | deck.gl, on the GPU | 3D shapes for thousands of objects |
+
+The buildings are all 78,045 OpenStreetMap footprints in the area (the 14,188 exposed ones in colour, the rest grey), raised to **6 m** each (`BUILDING_HEIGHT_M`), because OpenStreetMap almost never records how tall a building is here (0.2% of buildings have a number of floors). deck.gl reads the GeoJSON file itself (`data: BUILDINGS_ALL_URL`) and draws all of them in one go on the GPU. Cesium (the other extra) needs a special trick for the same number of buildings: see *entities or one primitive?* there.
+
+### Why deck.gl, if MapLibre can already draw dots?
+
+Scale and analysis. deck.gl draws millions of points, lines or hexagons smoothly, because all the work happens on the GPU. With 33 sensors you don't need that. With every rain gauge in Tamil Nadu, a flood-depth grid, or a year of readings, you do. Its layer catalogue also has hexagon bins, heatmaps, trips, arcs and point clouds.
+
+### A real-world bump: versions that don't fit
+
+`@deck.gl/mapbox` has two modes. **Interleaved** draws deck.gl's columns into MapLibre's own canvas, so map labels and columns hide each other correctly. In deck.gl 9.4 that mode reads a MapLibre internal (`map.transform`) that changed in MapLibre 6, and it crashes on every frame. We use the **overlaid** mode instead (`interleaved: false`): deck.gl draws on its own canvas on top of the map. The price: columns always sit on top of the labels.
+
+This happens all the time with "latest everything": two libraries are each fine, but not yet with each other. You read the error, find the cause, and choose between a workaround, an older version, or waiting for a fix. Write down which one you chose and why, in the code (see the comment in `DeckMap.svelte`).
+
+### Try
+
+- Swap `ColumnLayer` for `ScatterplotLayer` (also from `@deck.gl/layers`). You need `getRadius` instead of `getElevation`.
+- Change `transitions` to `{ getElevation: 5000 }`. Nice, or misleading?
+- Set `pitch: 0`. Which of the three engines would you now choose?
+
+### Questions
+
+- deck.gl and Cesium (in the other extra) share `columnHeight()` and `BUILDING_HEIGHT_M`. What else is duplicated between the map components? What would you move into `sensors.js` or `scenario.js`?
+- Because of the overlaid mode, the 3D buildings always sit on top of the street names. Is that a problem for a flood map? How would you decide between this workaround and waiting for a fixed version?
+- deck.gl is "for big data". The RHT platform shows flood-depth rasters of whole cities. Which engine would you use for that, and how would the data reach the browser?
+- Three engines, three ways of thinking. In a team of two developers, how many engines can you afford to maintain?

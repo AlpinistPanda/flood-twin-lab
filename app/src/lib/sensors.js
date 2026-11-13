@@ -55,6 +55,19 @@ export function classify(site, reading, previous) {
 	return waterLevel(reading.depth_m, previous);
 }
 
+// ── Extras: columns for the 3D views (Cesium, deck.gl) ─────────────────────────────────
+
+// Cesium and deck.gl both draw a column per sensor. Its height shows the water depth,
+// heavily exaggerated: 1 m of water → a column 1 km tall.
+export const METRES_PER_METRE_OF_WATER = 1000;
+const MIN_COLUMN_M = 40; // so dry and untrusted sensors stay visible
+
+export function columnHeight(properties) {
+	const isWater = properties.level in RANK; // dry, watch, warning or danger
+	const depth = isWater ? Math.max(properties.depth_m, 0) : 0;
+	return Math.max(depth * METRES_PER_METRE_OF_WATER, MIN_COLUMN_M);
+}
+
 // ── Step 2: GeoJSON for the maps ──────────────────────────────────────────────
 
 // Turn the API's sites + latest readings into GeoJSON: the format every web map understands.

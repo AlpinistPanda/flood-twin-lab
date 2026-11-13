@@ -13,6 +13,7 @@
 
 	const pages = [
 		{ href: '/maplibre', name: 'MapLibre GL', what: '2D map' },
+		{ href: '/deck', name: 'deck.gl', what: 'GPU layers' },
 		{ href: '/sensors', name: 'Sensor data', what: 'table' }
 	];
 </script>
