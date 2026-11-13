@@ -650,4 +650,243 @@ Compare: `git diff step-4 -- app/src`.
 
 ---
 
+## Walkthrough: step 4 in small pieces, with all the code
+
+Everything happens in `app/src/routes/+page.svelte`.
+
+### 4.A · A fetch that gives up
+
+At the top of the script, after the imports:
+
+```js
+	const POLL_MS = 10_000; // ask the API every 10 s (= 10 minutes of replayed data)
+	const TIMEOUT_MS = 5_000; // give up on a request that takes longer than this
+	const FEED_LOST_AFTER_MS = 30_000; // no good answer for this long: the feed is lost
+```
+
+and after `readingFor`:
+
+```js
+	// Fetch JSON, but never wait forever: a hanging server must count as a failure too.
+	async function getJSON(url) {
+		const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+		if (!res.ok) throw new Error(`${url} answered ${res.status}`);
+		return res.json();
+	}
+```
+
+### 4.B · `load` becomes `poll`
+
+Replace `let error = $state(null);` with the health of the feed:
+
+```js
+	let lastOk = $state(null); // when (browser clock) we last got a good answer
+	let lastError = $state(null); // what went wrong last time, if anything
+```
+
+Replace the whole `load` function with:
+
+```js
+	async function poll() {
+		try {
+			if (sites.length === 0) sites = (await getJSON('/api/sites')).sites; // only once
+			live = await getJSON('/api/live');
+			updateLevels();
+			lastOk = Date.now();
+			lastError = null;
+		} catch (e) {
+			// Keep the last good data on screen, but remember that this attempt failed.
+			lastError = e.name === 'TimeoutError' ? 'the API did not answer in time' : e.message;
+		}
+	}
+```
+
+Rename the other uses: `onMount(poll)`, and the button `onclick={poll}`. Replace the old error message in the HTML:
+
+```svelte
+	{#if lastError}
+		<p class="error">{lastError}</p>
+	{/if}
+```
+
+**You see:** the same page as before. Stop the API and press **Refresh**: */api/live answered 502*, and the table **keeps** the last data. Start the API again.
+
+### 4.C · Poll by itself
+
+Replace `onMount(poll);` with a loop that waits for each answer before it schedules the next request:
+
+```js
+	let polling = $state(true); // the Pause / Resume button
+
+	onMount(() => {
+		let timer;
+		let stopped = false;
+
+		// Poll, wait, poll again. We wait for each answer before scheduling the next request
+		// (setTimeout, not setInterval), so a slow API never piles up requests.
+		async function tick() {
+			if (polling) await poll();
+			if (!stopped) timer = setTimeout(tick, POLL_MS);
+		}
+		tick();
+
+		// Clean up when the page goes away, or the timer keeps running.
+		return () => {
+			stopped = true;
+			clearTimeout(timer);
+		};
+	});
+```
+
+Replace the *Refresh* button with two:
+
+```svelte
+		<button onclick={() => (polling = !polling)}>{polling ? 'Pause' : 'Resume'}</button>
+		<button onclick={poll}>Update now</button>
+```
+
+**You see:** don't touch anything: every 10 s the sensor time jumps 10 minutes. **Network** tab (F12): one `/api/live` every 10 s. **Pause** stops it.
+
+### 4.D · A clock and the feed status
+
+The status depends on **how long ago** the last good answer was, so the page needs a clock that is state. Add:
+
+```js
+	let now = $state(Date.now()); // ticks every second, so "… s ago" stays up to date
+
+	let feed = $derived(
+		lastOk == null
+			? lastError ? 'lost' : 'connecting'
+			: !lastError ? 'live'
+			: now - lastOk < FEED_LOST_AFTER_MS ? 'delayed'
+			: 'lost'
+	);
+
+	function secondsAgo(t) {
+		return Math.round((now - t) / 1000);
+	}
+```
+
+In `onMount`, after `tick();`:
+
+```js
+		const clock = setInterval(() => (now = Date.now()), 1000);
+```
+
+and in the clean-up function, add `clearInterval(clock);`.
+
+### 4.E · The status line
+
+Replace the paragraph with *Sensor time* and the buttons by:
+
+```svelte
+	<p class="status">
+		<span class="feed {feed}">●</span>
+		{#if feed === 'connecting'}
+			Connecting to the sensor feed …
+		{:else if feed === 'live'}
+			<strong>Live</strong> · sensor time {showTime(live?.time)} IST · updated {secondsAgo(lastOk)} s ago
+		{:else if feed === 'delayed'}
+			<strong>Delayed</strong> · last update {secondsAgo(lastOk)} s ago, retrying
+		{:else}
+			<strong>Feed lost</strong> · {lastError}
+		{/if}
+		<button onclick={() => (polling = !polling)}>{polling ? 'Pause' : 'Resume'}</button>
+		<button onclick={poll}>Update now</button>
+	</p>
+```
+
+Delete the `{#if lastError}` error paragraph: the status line says it now. Styles:
+
+```css
+	.status button {
+		margin-left: 0.4rem;
+	}
+	.feed {
+		font-size: 1.1rem;
+	}
+	.feed.connecting {
+		color: #b0b0b0;
+	}
+	.feed.live {
+		color: #2e7d32;
+	}
+	.feed.delayed {
+		color: #ef6c00;
+	}
+	.feed.lost {
+		color: #c62828;
+	}
+```
+
+**You see:** a green ● *Live · sensor time … · updated 4 s ago*, counting. Stop the API: within 10 s orange *Delayed*, after 30 s red *Feed lost*. Start it: green again, without reloading.
+
+### 4.F · Say it loudly when the feed is lost
+
+Under the status line:
+
+```svelte
+	{#if feed === 'lost'}
+		<div class="banner lost">
+			<strong>No data from the sensors{lastOk ? ` for ${secondsAgo(lastOk)} s` : ''}.</strong>
+			{#if live}
+				The map shows the last known levels, from {showTime(live.time)} IST. They may be out of date.
+			{/if}
+		</div>
+	{/if}
+```
+
+```css
+	.banner.lost {
+		background: #333;
+		color: #fff;
+		border-left-color: #c62828;
+	}
+```
+
+### 4.G · The alert banner must not lie
+
+In the alert banner, change the heading and add a case between the alerts and *No flood warnings*:
+
+```svelte
+			{#if alerts.length > 0}
+				<strong>
+					{feed === 'lost' ? 'Last known: ' : ''}{alerts.length}
+					{alerts.length === 1 ? 'sensor' : 'sensors'} at warning or danger:
+				</strong>
+				{#each alerts as site, i (site.id)}
+					{i > 0 ? ', ' : ''}{site.id} ({readingFor(site.id).depth_m} m)
+				{/each}
+			{:else if feed === 'lost'}
+				<!-- "No warnings" while the feed is down would be a false all-clear. -->
+				<strong>Flood warnings unknown: the feed is lost.</strong>
+			{:else}
+				<strong>No flood warnings.</strong>
+			{/if}
+```
+
+### 4.H · Grey out what may be old
+
+Wrap the map:
+
+```svelte
+	<div class:faded-map={feed === 'lost'}>
+		<MapLibreMap {geojson} />
+	</div>
+```
+
+```css
+	/* Feed lost: grey the map out, so nobody mistakes old colours for the current situation. */
+	.faded-map {
+		filter: grayscale(0.9) opacity(0.6);
+	}
+```
+
+and the table: `<table class:faded={feed === 'lost'}>`.
+
+**You see:** stop the API and wait 30 s: dark banner, *Last known: …* (or *Flood warnings unknown*), a grey map, a grey table. Start the API: everything back within 10 s. That's the reference of this step. Commit.
+
+
+---
+
 [Step 5 · Pages and layers →](05-pages-layers.md)

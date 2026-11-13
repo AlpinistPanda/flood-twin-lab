@@ -227,4 +227,118 @@ export default defineConfig({
 
 ---
 
+## Walkthrough: step 0 in small pieces, with all the code
+
+The same step as above, but cut into small pieces. Each piece gives you the code, tells you where it goes, and ends with something you can **see**. Do them in order; don't start the next piece until you see what the last one promises.
+
+### 0.A · Bring SvelteKit alive
+
+In the repository folder (in a Codespace that is `/workspaces/flood-twin-lab`):
+
+```bash
+npx sv@1.3.0 create app --template minimal --no-types --no-add-ons --install npm
+cd app
+npm run dev
+```
+
+**You see:** in the terminal, `VITE … ready` and `Local: http://localhost:5173/`. Open port 5173: *Welcome to SvelteKit*.
+
+Leave `npm run dev` running for the rest of this walkthrough. Every time you save a file, the browser updates.
+
+### 0.B · Your own first page
+
+Open `app/src/routes/+page.svelte`. Replace everything in it with:
+
+```svelte
+<h1>Flood twin · Tambaram</h1>
+<p>33 water-level sensors. Nothing to see yet.</p>
+```
+
+**You see:** your heading, a second after you save.
+
+### 0.C · A value in the page
+
+Values from JavaScript go into the HTML between `{ }`:
+
+```svelte
+<script>
+	const area = 'Tambaram';
+	const sensors = 33;
+</script>
+
+<h1>Flood twin · {area}</h1>
+<p>{sensors} water-level sensors. Nothing to see yet.</p>
+```
+
+**You see:** the same page, but the text now comes from the variables. Change `sensors` to `34` and save.
+
+### 0.D · A value that changes: `$state`
+
+A normal variable is drawn once. A `$state` variable is drawn **again every time it changes**. That is the whole idea of Svelte:
+
+```svelte
+<script>
+	const area = 'Tambaram';
+	let clicks = $state(0);
+</script>
+
+<h1>Flood twin · {area}</h1>
+<button onclick={() => clicks++}>Clicked {clicks} times</button>
+```
+
+**You see:** a button whose text counts your clicks. Now remove `$state(…)` (write `let clicks = 0;`) and try again: the number in the button doesn't change any more, although `clicks` does. Put `$state` back.
+
+### 0.E · A value computed from another: `$derived`
+
+```svelte
+<script>
+	let depth = $state(0.1); // metres
+	let deep = $derived(depth >= 0.3); // recomputed by itself when depth changes
+</script>
+
+<p>Depth: {depth.toFixed(2)} m · {deep ? 'Warning!' : 'OK'}</p>
+<button onclick={() => (depth += 0.05)}>More water</button>
+<button onclick={() => (depth = 0.1)}>Reset</button>
+```
+
+**You see:** click *More water* a few times: at 0.30 m it says *Warning!*. You never told the page to recompute `deep`: `$derived` did. You'll use exactly this in step 3.
+
+### 0.F · Style that stays in its component
+
+Add at the end of the file:
+
+```svelte
+<style>
+	p {
+		font-family: system-ui, sans-serif;
+		font-size: 1.2rem;
+	}
+</style>
+```
+
+**You see:** a bigger, cleaner font, only in this component. CSS in a `.svelte` file can't leak into other components.
+
+### 0.G · A second page
+
+Create the folder `app/src/routes/about/` and in it a file `+page.svelte`:
+
+```svelte
+<h1>About</h1>
+<p>A teaching twin. <a href="/">Back to the start</a></p>
+```
+
+**You see:** open `/about` (add it to the address in the browser): your second page. The folder name is the address. Step 5 uses this for the map page and the sensor table. Delete the `about` folder again when you're done.
+
+### 0.H · Save
+
+Put back the welcome text you like in `+page.svelte` (step 1 replaces it anyway), then in the repository folder:
+
+```bash
+git add -A
+git commit -m "My step 0: an empty SvelteKit app"
+```
+
+
+---
+
 [Step 1 · The live feed as a table →](01-feed-table.md)

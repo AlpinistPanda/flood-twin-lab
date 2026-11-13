@@ -558,4 +558,301 @@ export default defineConfig({
 
 ---
 
+## Walkthrough: step 2 in small pieces, with all the code
+
+Keep both terminals running (API and `npm run dev`), except when a piece says to restart.
+
+### 2.A · Install MapLibre and prepare Vite
+
+Stop the dev server (Ctrl+C in terminal 2), then in `app/`:
+
+```bash
+npm install maplibre-gl@6.18.0
+```
+
+In `app/vite.config.js`, add this block after `plugins: [ … ],` and before `server: {`:
+
+```js
+	// MapLibre loads a web worker from a file next to its own code. Vite's dependency
+	// pre-bundling would move that code and break the worker, so leave MapLibre as it is.
+	optimizeDeps: {
+		exclude: ['maplibre-gl']
+	},
+```
+
+Create **`app/src/routes/+page.js`** (a `.js` file next to `+page.svelte`):
+
+```js
+// A web map needs the browser (a canvas, WebGL, the window size).
+// So this page is rendered only in the browser, not on the server.
+export const ssr = false;
+```
+
+Start the dev server again: `npm run dev`.
+
+**You see:** the same table as before. Nothing new yet, but no errors either.
+
+### 2.B · An empty MapLibre map
+
+Create **`app/src/lib/MapLibreMap.svelte`**:
+
+```svelte
+<script>
+	import { onMount } from 'svelte';
+	import * as maplibregl from 'maplibre-gl';
+	import 'maplibre-gl/dist/maplibre-gl.css';
+
+	let container; // the <div> the map draws into
+
+	onMount(() => {
+		const m = new maplibregl.Map({
+			container,
+			style: 'https://tiles.openfreemap.org/styles/positron',
+			center: [80.14, 12.94], // [lon, lat]: Tambaram
+			zoom: 12
+		});
+		return () => m.remove(); // clean up when the component goes away
+	});
+</script>
+
+<div class="map" bind:this={container}></div>
+
+<style>
+	.map {
+		width: 100%;
+		height: 60vh;
+	}
+</style>
+```
+
+Put it on the page. In `+page.svelte`, add the import at the top of the script:
+
+```js
+	import MapLibreMap from '#lib/MapLibreMap.svelte';
+```
+
+and the component above the table:
+
+```svelte
+<MapLibreMap />
+```
+
+**You see:** a light-grey map of Tambaram above the table. Drag it, scroll to zoom. That's an empty MapLibre GL map: only the basemap, no data of yours yet.
+
+Try: change `zoom` to `15`, or the style to `liberty` instead of `positron`.
+
+### 2.C · Controls and a better start view
+
+Instead of a centre and a zoom, start on the box around all the sensors. Replace `center` and `zoom` with:
+
+```js
+			bounds: [
+				[80.08, 12.89], // west, south
+				[80.2, 12.99] // east, north
+			],
+			fitBoundsOptions: { padding: 30 }
+```
+
+and add two controls after the `new maplibregl.Map({ … });`:
+
+```js
+		m.addControl(new maplibregl.NavigationControl(), 'top-right');
+		m.addControl(new maplibregl.ScaleControl(), 'bottom-left');
+```
+
+**You see:** zoom buttons and a compass top right, a scale bar bottom left.
+
+### 2.D · One dot, typed by hand
+
+Before you use the API, prove that MapLibre can draw a point. After the controls, add:
+
+```js
+		m.on('load', () => {
+			m.addSource('test', {
+				type: 'geojson',
+				data: {
+					type: 'FeatureCollection',
+					features: [
+						{
+							type: 'Feature',
+							geometry: { type: 'Point', coordinates: [80.1242, 12.9861] }, // TBM-01
+							properties: { id: 'TBM-01' }
+						}
+					]
+				}
+			});
+			m.addLayer({
+				id: 'test-dot',
+				type: 'circle',
+				source: 'test',
+				paint: { 'circle-radius': 10, 'circle-color': '#c62828' }
+			});
+		});
+```
+
+`on('load')`: sources and layers can only be added once the basemap's style has loaded.
+
+**You see:** one red dot in the north of the area. Swap the two numbers in `coordinates` and save: the dot is gone (it is now at 80° north). Swap them back.
+
+### 2.E · All sensors, as GeoJSON
+
+Create **`app/src/lib/sensors.js`**:
+
+```js
+// Helpers shared by the page and the map engines.
+
+// Turn the API's sites + latest readings into GeoJSON: the format every web map understands.
+// One Point feature per sensor; the reading goes into the feature's properties.
+export function toGeoJSON(sites, live) {
+	return {
+		type: 'FeatureCollection',
+		features: sites.map((site) => {
+			const r = live?.readings.find((r) => r.site === site.id);
+			return {
+				type: 'Feature',
+				geometry: { type: 'Point', coordinates: [site.lon, site.lat] }, // GeoJSON is [lon, lat]!
+				properties: {
+					id: site.id,
+					type: site.type,
+					depth_m: r?.depth_m ?? null,
+					time: r?.time ?? null,
+					age_s: r?.age_s ?? null
+				}
+			};
+		})
+	};
+}
+```
+
+**Move** `showTime` and `showAge` from `+page.svelte` to the end of this file, with `export` in front of each `function`. In the page, import what it needs:
+
+```js
+	import { toGeoJSON, showTime, showAge } from '#lib/sensors.js';
+```
+
+and, after `let live = …`, make the GeoJSON:
+
+```js
+	// The same data as GeoJSON for the map. $derived recomputes it whenever sites or live change.
+	let geojson = $derived(toGeoJSON(sites, live));
+```
+
+Give it to the map: `<MapLibreMap {geojson} />`.
+
+In `MapLibreMap.svelte`, receive it, at the top of the script after the imports:
+
+```js
+	let { geojson } = $props();
+```
+
+and replace the hand-typed test source and layer (all of 2.D inside `on('load')`) with:
+
+```js
+		m.on('load', () => {
+			m.addSource('sensors', { type: 'geojson', data: geojson });
+			m.addLayer({
+				id: 'sensor-dots',
+				type: 'circle',
+				source: 'sensors',
+				paint: {
+					'circle-radius': 7,
+					'circle-color': '#1f6fb2',
+					'circle-stroke-width': 1.5,
+					'circle-stroke-color': '#ffffff'
+				}
+			});
+		});
+```
+
+**You see:** 33 blue dots... or maybe none! The map often finishes loading **before** the API has answered, and then `geojson` is still empty when the source is made. Reload a few times. The next piece fixes this.
+
+### 2.F · Follow the data: `$effect`
+
+The source must get the new data every time `geojson` changes. Keep the finished map in a `$state`, so an `$effect` can wait for it:
+
+```js
+	let container;
+	let map = $state(null); // set once the map and its style have loaded
+```
+
+At the end of the `on('load', () => { … })` function, after `addLayer`:
+
+```js
+			map = m;
+```
+
+And after `onMount(…)`:
+
+```js
+	// When new data arrives, give it to the source. The map redraws by itself.
+	$effect(() => {
+		map?.getSource('sensors').setData(geojson);
+	});
+```
+
+The effect reads `map` and `geojson`, so it runs when the map is ready, and again every time new data arrives.
+
+**You see:** all 33 dots, every time. Press **Refresh**: the dots stay (nothing to see change yet: they are all blue).
+
+### 2.G · Labels
+
+In `on('load')`, after the `sensor-dots` layer, a second layer on the **same** source:
+
+```js
+			m.addLayer({
+				id: 'sensor-labels',
+				type: 'symbol',
+				source: 'sensors',
+				minzoom: 13,
+				layout: {
+					'text-field': ['get', 'id'],
+					'text-font': ['Noto Sans Regular'],
+					'text-size': 11,
+					'text-offset': [0, 1.2],
+					'text-anchor': 'top'
+				},
+				paint: { 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 }
+			});
+```
+
+**You see:** zoom in: below each dot, its id. Zoom out past level 13: the labels disappear.
+
+### 2.H · A popup on click
+
+Import the time helpers in `MapLibreMap.svelte`:
+
+```js
+	import { showTime, showAge } from '#lib/sensors.js';
+```
+
+In `on('load')`, before `map = m`:
+
+```js
+			// Click a sensor: show its latest reading in a popup.
+			m.on('click', 'sensor-dots', (e) => {
+				const p = e.features[0].properties;
+				new maplibregl.Popup()
+					.setLngLat(e.features[0].geometry.coordinates)
+					.setHTML(
+						`<strong>${p.id}</strong> · ${p.type}<br>
+						 Depth: ${p.depth_m ?? '–'} m<br>
+						 Measured: ${showTime(p.time)} IST (${showAge(p.age_s)} ago)`
+					)
+					.addTo(m);
+			});
+			m.on('mouseenter', 'sensor-dots', () => (m.getCanvas().style.cursor = 'pointer'));
+			m.on('mouseleave', 'sensor-dots', () => (m.getCanvas().style.cursor = ''));
+```
+
+**You see:** a hand over the dots; click one: its id, type, depth and time.
+
+### 2.I · Tidy up
+
+In `+page.svelte`, give the page more room for the map (`max-width: 60rem` in `main`) and a little space above the table (`margin-top: 1rem` in `table`). In `MapLibreMap.svelte`, round the map's corners: `border-radius: 6px`.
+
+**You see:** the same as the reference at the end of the step above. Commit.
+
+
+---
+
 [Step 3 · Thresholds and alerts →](03-thresholds.md)

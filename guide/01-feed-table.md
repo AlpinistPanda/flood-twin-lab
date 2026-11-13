@@ -165,7 +165,7 @@ Commit: `git add -A && git commit -m "My step 1: the feed as a table"`.
 | Problem | Try |
 |---|---|
 | `/api/live` gives *404 Not Found* | The proxy isn't active: is the `server` block inside `defineConfig`? Did you restart `npm run dev`? |
-| `/api/live` gives *500* or *ECONNREFUSED* in terminal 2 | The API isn't running: start it in terminal 1 |
+| `/api/live` gives *502* (*Bad Gateway*), terminal 2 says `ECONNREFUSED` | The API isn't running: start it in terminal 1 |
 | `Cannot read properties of null (reading 'readings')` | You used `live.readings` before the data arrived. Use `live?.readings` |
 | The table is empty, no error | Did you store `.sites` from the first answer, not the whole object? Use `console.log` and the browser's developer tools (F12 → *Console*) |
 | Times are 5 h 30 min off | You forgot `* 1000`, or the `timeZone` |
@@ -328,6 +328,295 @@ export default defineConfig({
 </details>
 
 **Why it was done this way, and questions to think about:** [STEPS.md, step 1](../STEPS.md#step-1--fetch-the-live-sensor-feed--step-1).
+
+---
+
+## Walkthrough: step 1 in small pieces, with all the code
+
+Two terminals for this whole step: **terminal 1** runs the API, **terminal 2** runs `npm run dev` in `app/`.
+
+### 1.A · The API is alive
+
+Terminal 1, in the repository folder:
+
+```bash
+python api/main.py
+```
+
+**You see:** `Uvicorn running on http://0.0.0.0:8000`. In a third terminal (or open port 8000 in the browser and add `/live`):
+
+```bash
+curl -s localhost:8000/live | head -c 300
+```
+
+**You see:** `{"time":…,"readings":[{"site":"TBM-01",…`. The API works on its own, before your app is involved.
+
+### 1.B · The proxy
+
+Replace **all of** `app/vite.config.js` with:
+
+```js
+import adapter from '@sveltejs/adapter-auto';
+import { sveltekit } from '@sveltejs/kit/vite';
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+	plugins: [
+		sveltekit({
+			compilerOptions: {
+				// Force runes mode for the project, except for libraries. Can be removed in svelte 6.
+				runes: ({ filename }) =>
+					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
+			},
+			adapter: adapter()
+		})
+	],
+
+	// The browser asks this dev server for /api/…, and the dev server passes the
+	// request on to the sensor API. The browser only ever talks to one address.
+	server: {
+		proxy: {
+			'/api': {
+				target: process.env.API_URL ?? 'http://localhost:8000',
+				rewrite: (path) => path.replace(/^\/api/, '')
+			}
+		}
+	}
+});
+```
+
+Restart the dev server in terminal 2 (Ctrl+C, then `npm run dev`): it reads this file only when it starts.
+
+**You see:** open port 5173 with `/api/live` added to the address: the same JSON as in 1.A, now through **your app's** address.
+
+### 1.C · Fetch on a button press
+
+Replace everything in `app/src/routes/+page.svelte` with:
+
+```svelte
+<script>
+	let live = $state(null);
+
+	async function load() {
+		const res = await fetch('/api/live');
+		live = await res.json();
+	}
+</script>
+
+<h1>Tambaram water levels</h1>
+<button onclick={load}>Load</button>
+
+<pre>{JSON.stringify(live, null, 2)}</pre>
+```
+
+**You see:** `null`. Press **Load**: the whole answer of `/api/live`, nicely indented. Press again: the `time` at the top has moved on.
+
+### 1.D · Fetch when the page opens
+
+Nobody wants to press *Load* first. Add `onMount`, which runs once when the page is on screen:
+
+```svelte
+<script>
+	import { onMount } from 'svelte';
+
+	let live = $state(null);
+
+	async function load() {
+		const res = await fetch('/api/live');
+		live = await res.json();
+	}
+
+	onMount(load);
+</script>
+
+<h1>Tambaram water levels</h1>
+<button onclick={load}>Refresh</button>
+
+<pre>{JSON.stringify(live, null, 2)}</pre>
+```
+
+**You see:** the JSON appears straight away when you reload the page.
+
+### 1.E · Sites too, both at once
+
+`/live` has depths but no sensor types or locations; those are in `/sites`. Fetch both at the same time with `Promise.all`:
+
+```js
+	let sites = $state([]);
+	let live = $state(null);
+
+	async function load() {
+		const [sitesRes, liveRes] = await Promise.all([fetch('/api/sites'), fetch('/api/live')]);
+		sites = (await sitesRes.json()).sites;
+		live = await liveRes.json();
+	}
+```
+
+Change the `<pre>` to `<pre>{JSON.stringify(sites[0], null, 2)}</pre>` for a moment.
+
+**You see:** the first site: `TBM-01`, its `type`, `lat`, `lon`, `sensor_height_m`.
+
+### 1.F · The first table
+
+Replace the `<pre>` with a table. Start with only two columns:
+
+```svelte
+<table>
+	<thead>
+		<tr><th>Site</th><th>Type</th></tr>
+	</thead>
+	<tbody>
+		{#each sites as site (site.id)}
+			<tr>
+				<td>{site.id}</td>
+				<td>{site.type}</td>
+			</tr>
+		{/each}
+	</tbody>
+</table>
+```
+
+**You see:** 33 rows, *TBM-01 street* to *TBM-33 …*.
+
+### 1.G · The depth of each site
+
+Add a helper in the script, after `load`:
+
+```js
+	// Look up a site's latest reading by its id.
+	function readingFor(id) {
+		return live?.readings.find((r) => r.site === id);
+	}
+```
+
+and a third column. `{@const}` gives the reading a name inside the loop:
+
+```svelte
+		{#each sites as site (site.id)}
+			{@const r = readingFor(site.id)}
+			<tr>
+				<td>{site.id}</td>
+				<td>{site.type}</td>
+				<td>{r?.depth_m ?? '–'}</td>
+			</tr>
+		{/each}
+```
+
+Add `<th>Depth (m)</th>` to the header row.
+
+**You see:** depths like `0.01`, `-0.02`, `-7.49`, and a dash for TBM-17, which never reported.
+
+### 1.H · Times people can read
+
+Add these two helpers to the script:
+
+```js
+	// Times in the API are Unix seconds in UTC. Convert them only for display.
+	function showTime(seconds) {
+		if (seconds == null) return '–';
+		return new Date(seconds * 1000).toLocaleString('en-GB', {
+			timeZone: 'Asia/Kolkata',
+			day: '2-digit',
+			month: 'short',
+			hour: '2-digit',
+			minute: '2-digit'
+		});
+	}
+
+	function showAge(seconds) {
+		if (seconds == null) return '–';
+		if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
+		if (seconds < 86400) return `${Math.round(seconds / 3600)} h`;
+		return `${Math.round(seconds / 86400)} days`;
+	}
+```
+
+Two more columns, **Measured** and **Age**:
+
+```svelte
+				<td>{showTime(r?.time)}</td>
+				<td>{showAge(r?.age_s)}</td>
+```
+
+And above the table, the replay's "now":
+
+```svelte
+<p>
+	Sensor time: <strong>{showTime(live?.time)} IST</strong>
+	<button onclick={load}>Refresh</button>
+</p>
+```
+
+(Remove the old *Refresh* button under the heading.)
+
+**You see:** *Sensor time: 04 Nov, 08:35 IST*, and TBM-01 measured *12 days* ago.
+
+### 1.I · When the API is down
+
+Stop the API (Ctrl+C in terminal 1) and press **Refresh**. Nothing happens on the page; the browser's console (F12) shows a red error. Make it visible. Add `let error = $state(null);` and wrap the inside of `load` in `try … catch`:
+
+```js
+	async function load() {
+		error = null;
+		try {
+			const [sitesRes, liveRes] = await Promise.all([fetch('/api/sites'), fetch('/api/live')]);
+			if (!sitesRes.ok || !liveRes.ok) throw new Error(`API answered ${sitesRes.status} / ${liveRes.status}`);
+			sites = (await sitesRes.json()).sites;
+			live = await liveRes.json();
+		} catch (e) {
+			error = `Could not reach the sensor API: ${e.message}. Is it running?`;
+		}
+	}
+```
+
+and show it, above the table:
+
+```svelte
+{#if error}
+	<p class="error">{error}</p>
+{/if}
+```
+
+**You see:** with the API stopped, *Could not reach the sensor API: API answered 502 / 502. Is it running?* (the dev server answers 502, *Bad Gateway*, when it can't reach the API). Start the API again and press **Refresh**: the message disappears.
+
+### 1.J · A title and some style
+
+Add, under the script:
+
+```svelte
+<svelte:head>
+	<title>Flood twin · Tambaram</title>
+</svelte:head>
+```
+
+Wrap everything except the script, `<svelte:head>` and `<style>` in `<main>…</main>`, and add at the end:
+
+```svelte
+<style>
+	main {
+		font-family: system-ui, sans-serif;
+		max-width: 46rem;
+		margin: 2rem auto;
+		padding: 0 1rem;
+	}
+	table {
+		border-collapse: collapse;
+		width: 100%;
+	}
+	th,
+	td {
+		text-align: left;
+		padding: 0.3rem 0.6rem;
+		border-bottom: 1px solid #ddd;
+	}
+	.error {
+		color: #b00020;
+	}
+</style>
+```
+
+**You see:** a readable table, and *Flood twin · Tambaram* in the browser tab. Your page is now the same as the reference at the end of the step above. Commit.
+
 
 ---
 

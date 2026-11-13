@@ -814,4 +814,584 @@ export function load() {
 
 ---
 
+## Walkthrough: step 5 in small pieces, with all the code
+
+This step moves a lot of code. The pieces are ordered so that the app works again at the end of each one.
+
+### 5.A · The shared feed
+
+Create **`app/src/lib/feed.svelte.js`**. Everything in it already exists in your `+page.svelte`, from step 4: the constants, the state, `poll`, `getJSON`, `updateLevels` and the timer loop. Here it is gathered in one class:
+
+```js
+// Step 5: ONE sensor feed for the whole app.
+//
+// Until step 4 the page did the polling itself. Now there are several pages (the map, the
+// sensor table, and more to come), and they must all show the same data without each asking
+// the API on its own. So the feed lives here, in a shared store, and the layout starts it once.
+//
+// The file name ends in .svelte.js so that $state and $derived work outside a component.
+
+import { toGeoJSON, classify } from '#lib/sensors.js';
+
+const POLL_MS = 10_000; // ask the API every 10 s (= 10 minutes of replayed data)
+const TIMEOUT_MS = 5_000; // give up on a request that takes longer than this
+const FEED_LOST_AFTER_MS = 30_000; // no good answer for this long: the feed is lost
+
+class Feed {
+	sites = $state([]); // from /api/sites: where each sensor is
+	live = $state(null); // from /api/live: the latest reading of each sensor
+
+	levels = $state({}); // step 3: the level of each sensor
+	changes = $state({}); // step 3: how often each level changed since the app opened
+
+	polling = $state(true); // step 4: Pause / Resume
+	lastOk = $state(null); // when (browser clock) we last got a good answer
+	lastError = $state(null); // what went wrong last time, if anything
+	now = $state(Date.now()); // ticks every second, so "… s ago" stays up to date
+
+	// 'connecting', 'live', 'delayed' or 'lost'
+	status = $derived(
+		this.lastOk == null
+			? this.lastError ? 'lost' : 'connecting'
+			: !this.lastError ? 'live'
+			: this.now - this.lastOk < FEED_LOST_AFTER_MS ? 'delayed'
+			: 'lost'
+	);
+
+	geojson = $derived(toGeoJSON(this.sites, this.live, this.levels));
+
+	alerts = $derived(
+		this.sites
+			.filter((s) => this.levels[s.id] === 'danger' || this.levels[s.id] === 'warning')
+			.sort((a, b) => (this.levels[b.id] === 'danger') - (this.levels[a.id] === 'danger'))
+	);
+
+	untrusted = $derived(
+		this.sites.filter((s) => this.levels[s.id] === 'stale' || this.levels[s.id] === 'suspect').length
+	);
+
+	readingFor = (id) => this.live?.readings.find((r) => r.site === id);
+
+	secondsAgo = (t) => Math.round((this.now - t) / 1000);
+
+	// Arrow functions, so they can be used directly as onclick={feed.poll}.
+	poll = async () => {
+		try {
+			if (this.sites.length === 0) this.sites = (await getJSON('/api/sites')).sites; // only once
+			this.live = await getJSON('/api/live');
+			this.#updateLevels();
+			this.lastOk = Date.now();
+			this.lastError = null;
+		} catch (e) {
+			// Keep the last good data on screen, but remember that this attempt failed.
+			this.lastError = e.name === 'TimeoutError' ? 'the API did not answer in time' : e.message;
+		}
+	};
+
+	togglePolling = () => {
+		this.polling = !this.polling;
+	};
+
+	#updateLevels() {
+		const next = {};
+		for (const site of this.sites) {
+			const level = classify(site, this.readingFor(site.id), this.levels[site.id]);
+			const before = this.levels[site.id];
+			if (before && before !== level) this.changes[site.id] = (this.changes[site.id] ?? 0) + 1;
+			next[site.id] = level;
+		}
+		this.levels = next;
+	}
+
+	// Start polling. Returns a function that stops it again.
+	start() {
+		let timer;
+		let stopped = false;
+		const tick = async () => {
+			if (this.polling) await this.poll();
+			if (!stopped) timer = setTimeout(tick, POLL_MS); // wait for the answer, then schedule
+		};
+		tick();
+		const clock = setInterval(() => (this.now = Date.now()), 1000);
+		return () => {
+			stopped = true;
+			clearTimeout(timer);
+			clearInterval(clock);
+		};
+	}
+}
+
+// Fetch JSON, but never wait forever: a hanging server must count as a failure too.
+async function getJSON(url) {
+	const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+	if (!res.ok) throw new Error(`${url} answered ${res.status}`);
+	return res.json();
+}
+
+// The one and only feed. Every page imports this same object.
+export const feed = new Feed();
+```
+
+Compare it with your page line by line: `levels` became `this.levels`, `feed` became `status`, the `onMount` loop became `start()`.
+
+**You see:** nothing yet: nobody uses the feed.
+
+### 5.B · The page uses the shared feed
+
+Before you split the page, let it use the feed instead of its own copy. In `+page.svelte`, **delete** from the script: the three constants, all the `$state` and `$derived` lines, `getJSON`, `poll`, `updateLevels`, `readingFor`, `secondsAgo` and the whole `onMount(…)`. What's left of the script:
+
+```svelte
+<script>
+	import { onMount } from 'svelte';
+	import MapLibreMap from '#lib/MapLibreMap.svelte';
+	import { LEVELS, showTime, showAge } from '#lib/sensors.js';
+	import { feed } from '#lib/feed.svelte.js';
+
+	onMount(() => feed.start()); // start() returns the stop function; Svelte calls it when the page goes
+</script>
+```
+
+Now put `feed.` in front of every name in the HTML that came from the feed:
+
+| Was | Becomes |
+|---|---|
+| `feed === 'lost'`, `{feed}` | `feed.status === 'lost'`, `{feed.status}` |
+| `live`, `sites`, `levels`, `changes`, `alerts`, `untrusted`, `lastOk`, `lastError`, `polling`, `geojson` | `feed.live`, `feed.sites`, … , `feed.geojson` |
+| `readingFor(…)`, `secondsAgo(…)` | `feed.readingFor(…)`, `feed.secondsAgo(…)` |
+| `onclick={() => (polling = !polling)}` | `onclick={feed.togglePolling}` |
+| `onclick={poll}` | `onclick={feed.poll}` |
+
+**You see:** exactly the same page as at the end of step 4, working as before. The difference is invisible: the data now lives in `feed.svelte.js`.
+
+### 5.C · The layout starts the feed and shows the status
+
+The status line and banners should be on **every** page, so they move to the layout. `ssr = false` moves with them: create **`app/src/routes/+layout.js`**:
+
+```js
+// Web maps need the browser (a canvas, WebGL, the window size).
+// Every page of this app is rendered only in the browser.
+export const ssr = false;
+```
+
+and delete `app/src/routes/+page.js`.
+
+Replace **all of** `app/src/routes/+layout.svelte` with:
+
+```svelte
+<script>
+	import { onMount } from 'svelte';
+	import favicon from '#lib/assets/favicon.svg';
+	import { feed } from '#lib/feed.svelte.js';
+	import { showTime } from '#lib/sensors.js';
+
+	// The layout is the frame around EVERY page, and it stays mounted while you move
+	// between pages. So this is the place to start the sensor feed: once, for the whole app.
+	let { children } = $props();
+
+	onMount(() => feed.start());
+</script>
+
+<svelte:head>
+	<link rel="icon" href={favicon} />
+	<title>Flood twin · Tambaram</title>
+</svelte:head>
+
+<div class="app">
+	<header>
+		<strong class="title">Flood twin · Tambaram</strong>
+
+		<div class="status">
+			<span class="dot {feed.status}">●</span>
+			{#if feed.status === 'connecting'}
+				Connecting …
+			{:else if feed.status === 'live'}
+				<strong>Live</strong> · {showTime(feed.live?.time)} IST · {feed.secondsAgo(feed.lastOk)} s ago
+			{:else if feed.status === 'delayed'}
+				<strong>Delayed</strong> · last update {feed.secondsAgo(feed.lastOk)} s ago
+			{:else}
+				<strong>Feed lost</strong> · {feed.lastError}
+			{/if}
+			<button onclick={feed.togglePolling}>{feed.polling ? 'Pause' : 'Resume'}</button>
+			<button onclick={feed.poll}>Update now</button>
+		</div>
+	</header>
+
+	{#if feed.status === 'lost'}
+		<div class="banner lost">
+			<strong>No data from the sensors{feed.lastOk ? ` for ${feed.secondsAgo(feed.lastOk)} s` : ''}.</strong>
+			{#if feed.live}
+				Showing the last known levels, from {showTime(feed.live.time)} IST. They may be out of date.
+			{/if}
+		</div>
+	{/if}
+
+	{#if feed.live}
+		<div class="banner" class:alert={feed.alerts.length > 0}>
+			{#if feed.alerts.length > 0}
+				<strong>
+					{feed.status === 'lost' ? 'Last known: ' : ''}{feed.alerts.length}
+					{feed.alerts.length === 1 ? 'sensor' : 'sensors'} at warning or danger:
+				</strong>
+				{#each feed.alerts as site, i (site.id)}
+					{i > 0 ? ', ' : ''}{site.id} ({feed.readingFor(site.id).depth_m} m)
+				{/each}
+			{:else if feed.status === 'lost'}
+				<!-- "No warnings" while the feed is down would be a false all-clear. -->
+				<strong>Flood warnings unknown: the feed is lost.</strong>
+			{:else}
+				<strong>No flood warnings.</strong>
+			{/if}
+			<span class="note">· {feed.untrusted} of {feed.sites.length} sensors without recent or trustworthy data</span>
+		</div>
+	{/if}
+
+	<main>
+		{@render children()}
+	</main>
+</div>
+```
+
+Under it, the style: a dark-blue header, the coloured dots, the banners, and a column that fills the window (`.app`, `main`):
+
+```svelte
+<style>
+	:global(body) {
+		margin: 0;
+		font-family: system-ui, sans-serif;
+	}
+	/* The app fills the window: header and banners on top, the page takes the rest. */
+	.app {
+		display: flex;
+		flex-direction: column;
+		height: 100vh;
+	}
+	main {
+		flex: 1;
+		min-height: 0;
+		overflow: auto;
+	}
+	header {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.4rem 1.2rem;
+		padding: 0.5rem 1rem;
+		background: #17324a;
+		color: #fff;
+	}
+	.title {
+		font-size: 1.05rem;
+	}
+	nav {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.2rem;
+	}
+	nav a {
+		color: #cfe0ee;
+		text-decoration: none;
+		padding: 0.25rem 0.6rem;
+		border-radius: 4px;
+	}
+	nav a small {
+		opacity: 0.7;
+	}
+	nav a.active {
+		background: #fff;
+		color: #17324a;
+	}
+	.status {
+		margin-left: auto;
+		font-size: 0.85rem;
+	}
+	.status button {
+		margin-left: 0.3rem;
+	}
+	.dot.connecting {
+		color: #b0b0b0;
+	}
+	.dot.live {
+		color: #66bb6a;
+	}
+	.dot.delayed {
+		color: #ffa726;
+	}
+	.dot.lost {
+		color: #ef5350;
+	}
+	.banner {
+		padding: 0.4rem 1rem;
+		font-size: 0.9rem;
+		background: #e8f1f8;
+		border-left: 5px solid #5b8db8;
+	}
+	.banner.alert {
+		background: #fdecea;
+		border-left-color: #c62828;
+	}
+	.banner.lost {
+		background: #333;
+		color: #fff;
+		border-left-color: #c62828;
+	}
+	.note {
+		color: #555;
+		font-size: 0.85rem;
+	}
+</style>
+```
+
+In `+page.svelte`, **delete** what the layout now does: the `onMount` line and its import, the status paragraph, both banners and their CSS.
+
+**You see:** a dark-blue header with the title and the status, the banners under it, and your map and table below. **Network** tab: still one `/api/live` every 10 s.
+
+### 5.D · The sensor table gets its own page
+
+Create the folder `app/src/routes/sensors/` and in it **`+page.svelte`**:
+
+```svelte
+<script>
+	import { feed } from '#lib/feed.svelte.js';
+	import { LEVELS, showTime, showAge } from '#lib/sensors.js';
+
+	// The sensor table, a page of its own. It reads the same shared feed as the map.
+</script>
+
+<div class="page">
+	<h1>Sensor data</h1>
+	<p>
+		The latest reading of each of the {feed.sites.length} water-level sensors. <em>Changes</em> counts how
+		often a sensor's level changed since you opened the app.
+	</p>
+
+	<!-- the <table> from your +page.svelte goes here, unchanged -->
+</div>
+```
+
+**Cut** the `<table>…</table>` from `app/src/routes/+page.svelte` and paste it in place of the comment. Move its CSS too, and give `.page` a width: `max-width: 60rem; margin: 1.5rem auto; padding: 0 1rem;`.
+
+**You see:** open `/sensors`: the table under the header. `/` shows only the map now.
+
+### 5.E · The map gets its own page
+
+Create `app/src/routes/maplibre/` and in it **`+page.svelte`**:
+
+```svelte
+<script>
+	import MapLibreMap from '#lib/MapLibreMap.svelte';
+	import { feed } from '#lib/feed.svelte.js';
+</script>
+
+<MapLibreMap geojson={feed.geojson} />
+```
+
+In `MapLibreMap.svelte`, let the map fill whatever space it gets:
+
+```css
+	.map {
+		width: 100%;
+		height: 100%;
+	}
+```
+
+**You see:** `/maplibre`: the map fills everything below the header and banners, without a scroll bar.
+
+### 5.F · Navigation, and `/` goes to the map
+
+Delete `app/src/routes/+page.svelte` (its table and map have moved). Create **`app/src/routes/+page.js`** in its place:
+
+```js
+import { redirect } from '@sveltejs/kit';
+
+// The home address has no page of its own; it sends you to the map.
+export function load() {
+	redirect(307, '/maplibre');
+}
+```
+
+In `+layout.svelte`, add to the script:
+
+```js
+	import { page } from '$app/state';
+
+	const pages = [
+		{ href: '/maplibre', name: 'MapLibre GL', what: '2D map' },
+		{ href: '/sensors', name: 'Sensor data', what: 'table' }
+	];
+```
+
+and in the header, after the title:
+
+```svelte
+		<nav>
+			{#each pages as p (p.href)}
+				<a href={p.href} class:active={page.url.pathname === p.href}>
+					{p.name} <small>{p.what}</small>
+				</a>
+			{/each}
+		</nav>
+```
+
+**You see:** `/` sends you to `/maplibre`. The header has two links; the current page's is white. Switch pages: the status keeps counting, and the **Changes** column on *Sensor data* keeps its numbers. The feed never restarts.
+
+### 5.G · A list of layers and a Layers box
+
+Create **`app/src/lib/layers.svelte.js`**:
+
+```js
+// The information layers you can switch on and off, shared by every page.
+export const layers = $state({
+	sensors: { label: 'Water-level sensors', visible: true, legend: 'levels' }
+});
+```
+
+Create **`app/src/lib/LayerPanel.svelte`**:
+
+```svelte
+<script>
+	import { layers } from '#lib/layers.svelte.js';
+	import { LEVELS } from '#lib/sensors.js';
+
+	let open = $state(true);
+</script>
+
+<section class="panel">
+	<button class="head" onclick={() => (open = !open)} aria-expanded={open}>
+		Layers <span>{open ? '▾' : '▸'}</span>
+	</button>
+
+	{#if open}
+		{#each Object.entries(layers) as [id, layer] (id)}
+			<label>
+				<input type="checkbox" bind:checked={layer.visible} />
+				{layer.label}
+			</label>
+			{#if layer.visible && layer.legend === 'levels'}
+				<ul class="legend">
+					{#each Object.entries(LEVELS) as [key, l] (key)}
+						<li><i style:background={l.colour}></i>{l.label}</li>
+					{/each}
+				</ul>
+			{/if}
+		{/each}
+	{/if}
+</section>
+
+<style>
+	.panel {
+		position: absolute;
+		top: 10px;
+		left: 10px;
+		z-index: 10;
+		min-width: 13rem;
+		padding: 0.5rem 0.75rem;
+		background: rgba(255, 255, 255, 0.95);
+		border-radius: 6px;
+		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+		font-size: 0.9rem;
+	}
+	.head {
+		all: unset;
+		cursor: pointer;
+		display: flex;
+		justify-content: space-between;
+		width: 100%;
+		font-weight: 600;
+	}
+	label {
+		display: block;
+		margin-top: 0.45rem;
+		cursor: pointer;
+	}
+	.legend {
+		list-style: none;
+		margin: 0.25rem 0 0 1.4rem;
+		padding: 0;
+		font-size: 0.8rem;
+	}
+	i {
+		display: inline-block;
+		width: 0.7rem;
+		height: 0.7rem;
+		border-radius: 50%;
+		margin-right: 0.35rem;
+	}
+</style>
+```
+
+### 5.H · A frame for map pages
+
+Create **`app/src/lib/MapPage.svelte`**:
+
+```svelte
+<script>
+	import LayerPanel from '#lib/LayerPanel.svelte';
+	import { feed } from '#lib/feed.svelte.js';
+
+	// The frame of every map page: the map fills the space, the layer panel floats on top,
+	// and the map goes grey when the feed is lost.
+	let { children } = $props();
+</script>
+
+<div class="map-page">
+	<div class="map" class:faded={feed.status === 'lost'}>
+		{@render children()}
+	</div>
+	<LayerPanel />
+</div>
+
+<style>
+	.map-page {
+		position: relative;
+		height: 100%;
+	}
+	.map {
+		height: 100%;
+	}
+	.faded {
+		filter: grayscale(0.9) opacity(0.6);
+	}
+</style>
+```
+
+Use it on the map page, and give the map the layers:
+
+```svelte
+<script>
+	import MapPage from '#lib/MapPage.svelte';
+	import MapLibreMap from '#lib/MapLibreMap.svelte';
+	import { feed } from '#lib/feed.svelte.js';
+	import { layers } from '#lib/layers.svelte.js';
+</script>
+
+<MapPage>
+	<MapLibreMap geojson={feed.geojson} {layers} />
+</MapPage>
+```
+
+**You see:** the *Layers* box at the top left of the map, with the legend. The checkbox does nothing yet.
+
+### 5.I · The map follows the checkbox
+
+In `MapLibreMap.svelte`, receive `layers`:
+
+```js
+	let { geojson, layers } = $props();
+```
+
+and after the other `$effect`:
+
+```js
+	// Show or hide the sensor layers when the checkbox in the layer panel changes.
+	$effect(() => {
+		const visibility = layers.sensors.visible ? 'visible' : 'none';
+		for (const id of ['sensor-dots', 'sensor-labels']) map?.setLayoutProperty(id, 'visibility', visibility);
+	});
+```
+
+**You see:** untick *Water-level sensors*: the dots and labels disappear. Go to *Sensor data* and back: still off. Stop the API: the map goes grey. That's the reference of this step. Commit.
+
+
+---
+
 [Step 6 · Charts in the popup →](06-charts.md)

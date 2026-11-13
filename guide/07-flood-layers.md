@@ -472,4 +472,310 @@ Point `FLOOD_URL` at `my_max_depth.tif`. What's different from ours? (Ours is al
 
 ---
 
+## Walkthrough: step 7 in small pieces, with all the code
+
+### 7.A · The files are there
+
+In the repository folder:
+
+```bash
+git checkout step-9 -- app/static/layers
+ls -lh app/static/layers
+```
+
+**You see:** four files. With the dev server running, open port 5173 with `/layers/depth_timeseries_100yr.json` added to the address: the JSON appears. Files in `static/` are served as they are.
+
+### 7.B · Install the COG plugin
+
+In `app/` (stop the dev server first, start it again after):
+
+```bash
+npm install @geomatico/maplibre-cog-protocol@0.10.0
+```
+
+### 7.C · The raster on the map, as simply as possible
+
+Create **`app/src/lib/scenario.js`** with only this:
+
+```js
+import * as maplibregl from 'maplibre-gl';
+import { cogProtocol, setColorFunction } from '@geomatico/maplibre-cog-protocol';
+
+export const FLOOD_URL = `${location.origin}/layers/max_depth_100yr.tif`;
+
+// For now: every wet pixel the same blue, everything else transparent.
+function colourDepth([depth], colour) {
+	if (depth > 0) colour.set([49, 130, 189, 200]);
+	else colour.set([0, 0, 0, 0]);
+}
+
+export function addFloodDepth(map) {
+	maplibregl.addProtocol('cog', cogProtocol);
+	setColorFunction(FLOOD_URL, colourDepth);
+	map.addSource('flood', { type: 'raster', url: `cog://${FLOOD_URL}`, tileSize: 256 });
+	map.addLayer({ id: 'flood-depth', type: 'raster', source: 'flood', paint: { 'raster-opacity': 0.8 } });
+}
+```
+
+In `MapLibreMap.svelte`, import it (`import { addFloodDepth } from '#lib/scenario.js';`), and call it for a moment at the start of `on('load')`, before the sensor source:
+
+```js
+			addFloodDepth(m); // temporary: always on
+```
+
+**You see:** blue areas along the water courses, under the sensor dots. **Network** tab: several requests for `max_depth_100yr.tif`, with status **206**. That's the plugin reading pieces of one file.
+
+Two problems to fix next: everything is the same blue, and the water covers the street names.
+
+### 7.D · Depth classes
+
+Replace the colour function in `scenario.js` with classes:
+
+```js
+// Depth classes for the raster, light to dark blue. [from (m), colour]
+export const DEPTH_CLASSES = [
+	[0.05, '#c6dbef'],
+	[0.15, '#9ecae1'],
+	[0.3, '#6baed6'],
+	[0.5, '#3182bd'],
+	[1, '#08519c'],
+	[2, '#08306b']
+];
+// The hex colours as [r, g, b] numbers, worked out once, not for every pixel.
+const RGB = DEPTH_CLASSES.map(([from, hex]) => [from, [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))]);
+
+// Called for EVERY pixel of every tile, so keep it simple and fast.
+function colourDepth([depth], colour) {
+	if (!(depth >= DEPTH_CLASSES[0][0])) return colour.set([0, 0, 0, 0]); // dry, or no data (NaN): transparent
+	let rgb = RGB[0][1];
+	for (const [from, c] of RGB) if (depth >= from) rgb = c;
+	colour.set([...rgb, 210]);
+}
+```
+
+**You see:** light blue at the edges of the flood, dark blue where it's deep.
+
+### 7.E · Under the street names
+
+MapLibre draws layers in the order they're added. Give `addFloodDepth` a second parameter and pass it to `addLayer`, so the raster goes **under** that layer:
+
+```js
+export function addFloodDepth(map, beforeId) {
+	…
+	map.addLayer({ id: 'flood-depth', type: 'raster', source: 'flood', paint: { 'raster-opacity': 0.8 } }, beforeId);
+}
+```
+
+In `on('load')`:
+
+```js
+			const underLabels = m.getStyle().layers.find((l) => l.type === 'symbol')?.id; // the basemap's first label layer
+			addFloodDepth(m, underLabels); // temporary: always on
+```
+
+**You see:** street names on top of the water again.
+
+### 7.F · A switch in the Layers box
+
+Add the layer to `layers.svelte.js`:
+
+```js
+export const layers = $state({
+	sensors: { label: 'Water-level sensors (live)', visible: true, legend: 'levels' },
+	flood: { label: 'Max flood depth, 100-year flood', visible: false, legend: 'depth' }
+});
+```
+
+Remove the two temporary lines from `on('load')`. Instead, a new `$effect` at the end of the script adds the layer the first time it is switched on, and after that only shows and hides it:
+
+```js
+	// The scenario layers: added the first time they are switched on (so nobody downloads
+	// them who doesn't look at them), then only shown and hidden.
+	$effect(() => {
+		if (!map) return;
+		const underLabels = map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
+		if (layers.flood.visible && !map.getLayer('flood-depth')) addFloodDepth(map, underLabels);
+		if (map.getLayer('flood-depth')) map.setLayoutProperty('flood-depth', 'visibility', layers.flood.visible ? 'visible' : 'none');
+	});
+```
+
+`addProtocol` may only run once per page, but now `addFloodDepth` can run again when you come back to the map page. Guard it in `scenario.js`:
+
+```js
+let registered = false;
+
+export function addFloodDepth(map, beforeId) {
+	if (!registered) {
+		maplibregl.addProtocol('cog', cogProtocol); // once per page
+		setColorFunction(FLOOD_URL, colourDepth);
+		registered = true;
+	}
+	map.addSource('flood', { type: 'raster', url: `cog://${FLOOD_URL}`, tileSize: 256 });
+	map.addLayer({ id: 'flood-depth', type: 'raster', source: 'flood', paint: { 'raster-opacity': 0.8 } }, beforeId);
+}
+```
+
+**You see:** a second checkbox in the Layers box. The flood appears only when you tick it, and the `.tif` requests start only then.
+
+### 7.G · The legend for depths
+
+In `LayerPanel.svelte`, import the classes (`import { DEPTH_CLASSES } from '#lib/scenario.js';`) and, after the `levels` legend (turn its `{/if}` into the next branch):
+
+```svelte
+			{:else if layer.visible && layer.legend === 'depth'}
+				<ul class="legend">
+					{#each DEPTH_CLASSES as [from, colour], i (from)}
+						<li>
+							<i class="sq" style:background={colour}></i>{from}{i < DEPTH_CLASSES.length - 1 ? ` – ${DEPTH_CLASSES[i + 1][0]}` : ' and more'} m
+						</li>
+					{/each}
+				</ul>
+			{/if}
+```
+
+and `i.sq { border-radius: 2px; }` in the style: squares for areas, dots for sensors.
+
+**You see:** six depth classes under the flood switch when it's on.
+
+### 7.H · Click: the depth from the file
+
+In `scenario.js`, import `locationValues` too, and add:
+
+```js
+// The depth in the raster at one place, read from the file, not from the picture.
+// Always at full resolution (zoom 16), not from a coarser overview.
+export async function floodDepthAt(lngLat) {
+	const [depth] = await locationValues(FLOOD_URL, { latitude: lngLat.lat, longitude: lngLat.lng }, 16);
+	return Number.isFinite(depth) && depth >= DEPTH_CLASSES[0][0] ? depth : null;
+}
+```
+
+In `MapLibreMap.svelte`, import `floodDepthAt` too, and in `on('load')`, after the sensor click:
+
+```js
+			// A click that misses the sensors: the flood depth there.
+			m.on('click', async (e) => {
+				if (m.queryRenderedFeatures(e.point, { layers: ['sensor-dots'] }).length) return; // handled above
+				if (layers.flood.visible) {
+					const depth = await floodDepthAt(e.lngLat);
+					const text = depth == null ? 'Dry in this scenario' : `Max flood depth: <strong>${depth.toFixed(2)} m</strong>`;
+					new maplibregl.Popup().setLngLat(e.lngLat).setHTML(`${text}<br><small>100-year scenario</small>`).addTo(m);
+				}
+			});
+```
+
+**You see:** click in the blue: *Max flood depth: 0.84 m*. Away from it: *Dry in this scenario*. On a sensor: only the sensor popup.
+
+### 7.I · The buildings
+
+In `scenario.js`:
+
+```js
+import { waterLevel, LEVELS } from '#lib/sensors.js';
+
+export const BUILDINGS_URL = '/layers/buildings_exposure.geojson';
+
+// The vector layer: building outlines, coloured with the SAME thresholds as the sensors.
+export function addBuildings(map, beforeId) {
+	map.addSource('buildings', { type: 'geojson', data: BUILDINGS_URL });
+	map.addLayer(
+		{
+			id: 'buildings-exposed',
+			type: 'fill',
+			source: 'buildings',
+			paint: {
+				'fill-color': [
+					'step', ['get', 'depth_m'],
+					LEVELS.watch.colour, 0.3, LEVELS.warning.colour, 0.5, LEVELS.danger.colour
+				],
+				'fill-opacity': 0.85
+			}
+		},
+		beforeId
+	);
+}
+
+export function buildingPopup(p) {
+	const level = waterLevel(p.depth_m);
+	return `<strong>Building</strong> · OpenStreetMap ${p.osm_id}<br>
+		Type: ${p.use}<br>
+		Max flood depth: <strong>${p.depth_m} m</strong> · ${LEVELS[level].label}<br>
+		<small>100-year scenario. Exposure, not damage.</small>`;
+}
+```
+
+In `layers.svelte.js`, between the sensors and the flood:
+
+```js
+	buildings: { label: 'Buildings exposed, 100-year flood', visible: false, legend: 'exposure' },
+```
+
+In `MapLibreMap.svelte`, import `addBuildings` and `buildingPopup`, and make the scenario effect handle both layers, **raster under buildings, buildings under labels**, whichever is switched on first:
+
+```js
+	$effect(() => {
+		if (!map) return;
+		const underLabels = map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
+		// The raster always goes below the buildings, whichever is switched on first.
+		const underBuildings = map.getLayer('buildings-exposed') ? 'buildings-exposed' : underLabels;
+		if (layers.flood.visible && !map.getLayer('flood-depth')) addFloodDepth(map, underBuildings);
+		if (layers.buildings.visible && !map.getLayer('buildings-exposed')) addBuildings(map, underLabels);
+		for (const [id, on] of [['flood-depth', layers.flood.visible], ['buildings-exposed', layers.buildings.visible]]) {
+			if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+		}
+	});
+```
+
+In the general click handler, check for a building first:
+
+```js
+				const building = m.getLayer('buildings-exposed')
+					? m.queryRenderedFeatures(e.point, { layers: ['buildings-exposed'] })[0]
+					: null;
+				if (building) {
+					new maplibregl.Popup().setLngLat(e.lngLat).setHTML(buildingPopup(building.properties)).addTo(m);
+				} else if (layers.flood.visible) {
+					… // the flood depth, as before
+				}
+```
+
+The legend, in `LayerPanel.svelte`, another branch:
+
+```svelte
+			{:else if layer.visible && layer.legend === 'exposure'}
+				<ul class="legend">
+					<li><i class="sq" style:background={LEVELS.watch.colour}></i>0.15 – 0.30 m</li>
+					<li><i class="sq" style:background={LEVELS.warning.colour}></i>0.30 – 0.50 m</li>
+					<li><i class="sq" style:background={LEVELS.danger.colour}></i>0.50 m and more</li>
+				</ul>
+```
+
+**You see:** tick *Buildings exposed* and zoom in: yellow, orange and red buildings, on top of the blue, under the street names. Click one: its popup. Tick the layers in the other order: the order on the map stays right.
+
+### 7.J · Pages that can't draw everything
+
+Finally, prepare for other map engines (the extras), which may not support every layer. In `LayerPanel.svelte`:
+
+```js
+	// `supported` lists the layers this page can draw; the others are greyed out.
+	let { supported = Object.keys(layers) } = $props();
+```
+
+and in the loop:
+
+```svelte
+			{@const ok = supported.includes(id)}
+			<label class:off={!ok} title={ok ? '' : 'Only on the MapLibre page'}>
+				<input type="checkbox" bind:checked={layer.visible} disabled={!ok} />
+				{layer.label}
+			</label>
+```
+
+Add `ok &&` in front of the three legend conditions, and `label.off { color: #999; cursor: default; }` to the style. In `MapPage.svelte`, pass it on: `let { children, supported } = $props();` and `<LayerPanel {supported} />`.
+
+**You see:** nothing changes on the MapLibre page (it supports everything). That's the reference of this step. Commit.
+
+
+---
+
 [Step 8 · The flood over time →](08-flood-time.md)

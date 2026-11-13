@@ -660,4 +660,485 @@ Compare: `git diff step-8 -- app/src`.
 
 ---
 
+## Walkthrough: step 8 in small pieces, with all the code
+
+### 8.A · Look at the time series' description
+
+In `scenario.js`:
+
+```js
+const TIMESERIES_META_URL = '/layers/depth_timeseries_100yr.json';
+
+// Which model step each band holds, and the wet area per step. Loaded once.
+let meta;
+export async function timeseriesInfo() {
+	meta ??= fetch(TIMESERIES_META_URL).then((r) => r.json());
+	return meta;
+}
+```
+
+Check that it loads: add, for a moment, to the script of `routes/maplibre/+page.svelte`:
+
+```js
+	import { timeseriesInfo } from '#lib/scenario.js';
+	timeseriesInfo().then((i) => console.log(i.steps.length, i.minutes_per_step, Math.max(...i.wet_km2)));
+```
+
+**You see:** in the console, `119 60 39.55`: 119 steps, an hour apart, at most 39.55 km² wet. Remove the two lines again.
+
+### 8.B · One `paint` for both rasters
+
+In `scenario.js`, split the colour function: one that colours a depth in metres, and the max-depth version that calls it:
+
+```js
+// One depth (m) → one colour. Called for EVERY pixel of every tile, so keep it simple and fast.
+function paint(depth, colour) {
+	if (!(depth >= DEPTH_CLASSES[0][0])) return colour.set([0, 0, 0, 0]); // dry, or no data (NaN): transparent
+	let rgb = RGB[0][1];
+	for (const [from, c] of RGB) if (depth >= from) rgb = c;
+	colour.set([...rgb, 210]);
+}
+
+// The max-depth file holds metres, one band.
+const colourDepth = ([depth], colour) => paint(depth, colour);
+```
+
+**You see:** *Maximum depth* looks exactly as before.
+
+### 8.C · The time series at one fixed hour
+
+Add to `scenario.js`:
+
+```js
+export const TIMESERIES_URL = `${location.origin}/layers/depth_timeseries_100yr.tif`;
+
+// The time series holds centimetres, one band per time step. Which band to show is `shownBand`.
+const NODATA_CM = 65535;
+let shownBand = 0;
+const colourDepthAtStep = (pixel, colour) => {
+	const cm = pixel[shownBand];
+	paint(cm === NODATA_CM ? NaN : cm / 100, colour); // we store centimetres, we compute in metres
+};
+```
+
+Register both colour functions in one place, and use it in `addFloodDepth`:
+
+```js
+let registered = false;
+function registerOnce() {
+	if (registered) return;
+	maplibregl.addProtocol('cog', cogProtocol); // once per page
+	setColorFunction(FLOOD_URL, colourDepth);
+	setColorFunction(TIMESERIES_URL, colourDepthAtStep);
+	registered = true;
+}
+
+export function addFloodDepth(map, beforeId) {
+	registerOnce();
+	map.addSource('flood', { type: 'raster', url: `cog://${FLOOD_URL}`, tileSize: 256 });
+	map.addLayer({ id: 'flood-depth', type: 'raster', source: 'flood', paint: { 'raster-opacity': 0.8 } }, beforeId);
+}
+
+export function addFloodTimeseries(map, band, beforeId) {
+	registerOnce();
+	shownBand = band;
+	map.addSource('flood-time', { type: 'raster', url: `cog://${TIMESERIES_URL}`, tileSize: 256 });
+	map.addLayer(
+		{
+			id: 'flood-time',
+			type: 'raster',
+			source: 'flood-time',
+			paint: { 'raster-opacity': 0.8, 'raster-fade-duration': 0 }
+		},
+		beforeId
+	);
+}
+```
+
+Add the layer to `layers.svelte.js`, with its time step (`band`) set to the peak for now:
+
+```js
+	floodTime: { label: 'Flood depth over time, 100-year flood', visible: false, legend: 'depth', band: 59 }
+```
+
+In `MapLibreMap.svelte`, import `addFloodTimeseries`, and one more `$effect`:
+
+```js
+	// The flood over time, at the time step in layers.floodTime.band.
+	$effect(() => {
+		if (!map) return;
+		const { visible, band } = layers.floodTime;
+		const below = map.getLayer('buildings-exposed') ? 'buildings-exposed' : map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
+		if (visible && !map.getLayer('flood-time')) addFloodTimeseries(map, band, below);
+		if (map.getLayer('flood-time')) map.setLayoutProperty('flood-time', 'visibility', visible ? 'visible' : 'none');
+	});
+```
+
+**You see:** a new checkbox *Flood depth over time*. Tick it (and untick *Max flood depth*): the flood at hour 59, close to the maximum. Change `band: 59` to `band: 10` in `layers.svelte.js` and reload: much less water.
+
+### 8.D · Change the hour: remove and add again
+
+Add to `scenario.js`:
+
+```js
+// Show time step `band`. The colours are made when MapLibre asks the plugin for a tile, so to
+// show another step we remove the layer and its source and add them again: MapLibre asks for
+// the tiles again, and the plugin colours them with the new band. The plugin keeps the bytes
+// it has already downloaded, so this costs no new download.
+export function showFloodStep(map, band, beforeId) {
+	if (band === shownBand || !map.getLayer('flood-time')) return;
+	const visibility = map.getLayoutProperty('flood-time', 'visibility');
+	map.removeLayer('flood-time');
+	map.removeSource('flood-time');
+	addFloodTimeseries(map, band, beforeId);
+	map.setLayoutProperty('flood-time', 'visibility', visibility ?? 'visible');
+}
+```
+
+In the effect of 8.C, import `showFloodStep` and call it when the layer exists:
+
+```js
+		if (map.getLayer('flood-time')) {
+			showFloodStep(map, band, below);
+			map.setLayoutProperty('flood-time', 'visibility', visible ? 'visible' : 'none');
+		}
+```
+
+And a first, plain slider, on the map page for now. In `routes/maplibre/+page.svelte`, inside `<MapPage>`, after the map:
+
+```svelte
+	{#if layers.floodTime.visible}
+		<input type="range" min="0" max="118" bind:value={layers.floodTime.band} style="position: absolute; bottom: 40px; left: 30%; width: 40%; z-index: 10" />
+	{/if}
+```
+
+**You see:** with *Over time* on, drag the slider: the water rises and falls. Set `band` back to `0` in `layers.svelte.js`.
+
+### 8.E · One choice instead of two checkboxes
+
+In `layers.svelte.js`, put both flood layers in a group, and give each the name it has inside the group:
+
+```js
+// The groups, and the title they get in the layer panel.
+export const GROUPS = { flood: 'Flood depth, 100-year flood' };
+
+export const layers = $state({
+	sensors: { label: 'Water-level sensors (live)', visible: true, legend: 'levels' },
+	buildings: { label: 'Buildings exposed, 100-year flood', visible: false, legend: 'exposure' },
+	flood: { label: 'Max flood depth, 100-year flood', visible: false, legend: 'depth', group: 'flood', option: 'Maximum depth' },
+	floodTime: { label: 'Flood depth over time, 100-year flood', visible: false, legend: 'depth', group: 'flood', option: 'Over time', band: 0 }
+});
+```
+
+In `LayerPanel.svelte`, import `GROUPS` as well, and add helpers to the script:
+
+```js
+	// Layers in a group are shown as one choice (radio buttons): one of them, or none.
+	const members = (group) => Object.entries(layers).filter(([, l]) => l.group === group);
+	const firstOf = (group) => members(group)[0][0];
+	const chosen = (group) => members(group).find(([, l]) => l.visible)?.[0] ?? null;
+	function choose(group, id) {
+		for (const [key, l] of members(group)) l.visible = key === id;
+	}
+```
+
+In the loop, a layer **with** a group is drawn once, at the group's first member; layers without a group keep their checkbox. Wrap your existing `<label>` and legends in the `{:else}`:
+
+```svelte
+		{#each Object.entries(layers) as [id, layer] (id)}
+			{@const ok = supported.includes(id)}
+			{#if layer.group}
+				{#if id === firstOf(layer.group)}
+					<fieldset>
+						<legend>{GROUPS[layer.group]}</legend>
+						<label>
+							<input type="radio" checked={!chosen(layer.group)} onchange={() => choose(layer.group, null)} />
+							None
+						</label>
+						{#each members(layer.group) as [key, member] (key)}
+							{@const can = supported.includes(key)}
+							<label class:off={!can} title={can ? '' : 'Only on the MapLibre page'}>
+								<input type="radio" checked={member.visible} disabled={!can} onchange={() => choose(layer.group, key)} />
+								{member.option}
+							</label>
+						{/each}
+					</fieldset>
+					{#if chosen(layer.group)}
+						<ul class="legend">
+							{#each DEPTH_CLASSES as [from, colour], i (from)}
+								<li>
+									<i class="sq" style:background={colour}></i>{from}{i < DEPTH_CLASSES.length - 1 ? ` – ${DEPTH_CLASSES[i + 1][0]}` : ' and more'} m
+								</li>
+							{/each}
+						</ul>
+					{/if}
+				{/if}
+			{:else}
+				<!-- your checkbox <label> and the 'levels' and 'exposure' legends, as before -->
+			{/if}
+		{/each}
+```
+
+The `depth` legend branch of step 7 can go: the group draws its own legend. Style the fieldset:
+
+```css
+	fieldset {
+		border: none;
+		margin: 0.45rem 0 0;
+		padding: 0;
+	}
+	fieldset legend {
+		padding: 0;
+		margin-bottom: 0.1rem;
+	}
+	fieldset label {
+		margin: 0.15rem 0 0 1.2rem;
+	}
+```
+
+**You see:** *Flood depth, 100-year flood* with *None*, *Maximum depth*, *Over time*. Only one can be on, and there is one legend.
+
+### 8.F · The time bar
+
+Replace the plain slider on the map page by a component. Create **`app/src/lib/FloodTimeBar.svelte`**, starting with the slider and the time:
+
+```svelte
+<script>
+	import { layers } from '#lib/layers.svelte.js';
+	import { timeseriesInfo } from '#lib/scenario.js';
+
+	// One model output per hour: the first one is Time 0:00, and every step adds one hour.
+	const layer = layers.floodTime;
+
+	let info = $state(null); // { steps: [0, 1, …], minutes_per_step: 60, wet_km2: […] }
+	timeseriesInfo().then((i) => (info = i));
+
+	let last = $derived(info ? info.steps.length - 1 : 0);
+
+	function time(band) {
+		const minutes = info.steps[band] * (info.minutes_per_step ?? 60);
+		return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}`;
+	}
+</script>
+
+{#if info}
+	<section class="bar" aria-label="Flood over time">
+		<div class="head">
+			<strong class="now">Time {time(layer.band)}</strong>
+			<span>{info.wet_km2[layer.band]} km² wet</span>
+		</div>
+		<input type="range" min="0" max={last} step="1" bind:value={layer.band} aria-label="Time" />
+	</section>
+{/if}
+
+<style>
+	.bar {
+		position: absolute;
+		left: 50%;
+		bottom: 34px; /* above MapLibre's scale and attribution */
+		transform: translateX(-50%);
+		width: min(820px, calc(100% - 120px));
+		z-index: 10;
+		padding: 0.45rem 0.9rem;
+		background: rgba(255, 255, 255, 0.95);
+		border-radius: 6px;
+		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+		font-size: 0.85rem;
+	}
+	.head {
+		display: flex;
+		gap: 0.6rem;
+	}
+	input[type='range'] {
+		width: 100%;
+	}
+</style>
+```
+
+On the map page:
+
+```svelte
+<script>
+	import MapPage from '#lib/MapPage.svelte';
+	import MapLibreMap from '#lib/MapLibreMap.svelte';
+	import FloodTimeBar from '#lib/FloodTimeBar.svelte';
+	import { feed } from '#lib/feed.svelte.js';
+	import { layers } from '#lib/layers.svelte.js';
+</script>
+
+<MapPage>
+	<MapLibreMap geojson={feed.geojson} {layers} />
+	{#if layers.floodTime.visible}
+		<FloodTimeBar />
+	{/if}
+</MapPage>
+```
+
+**You see:** choose *Over time*: a white bar at the bottom, *Time 0:00 · 2.48 km² wet*. Drag: the time, the area and the map follow.
+
+### 8.G · Play
+
+In the time bar's script:
+
+```js
+	import { onDestroy } from 'svelte';
+
+	// ▶ plays one hour every 250 ms: the whole event in about 30 seconds.
+	let timer = $state(null);
+	function play() {
+		if (timer) return stop();
+		if (layer.band >= last) layer.band = 0; // at the end: start again
+		timer = setInterval(() => {
+			if (layer.band >= last) return stop();
+			layer.band += 1;
+		}, 250);
+	}
+	function stop() {
+		clearInterval(timer);
+		timer = null;
+	}
+	onDestroy(stop);
+```
+
+A button at the start of `.head`, and stop playing when someone drags:
+
+```svelte
+			<button onclick={play} aria-label={timer ? 'Pause' : 'Play'}>{timer ? '❚❚' : '▶'}</button>
+```
+
+```svelte
+		<input type="range" min="0" max={last} step="1" bind:value={layer.band} oninput={stop} aria-label="Time" />
+```
+
+**You see:** ▶ plays the flood in about 30 seconds and stops at *Time 118:00*.
+
+### 8.H · Ticks, labels and the wet-area curve
+
+Under the slider: a tick per hour, a longer one and a label every 12 hours. Above it: the wet area through the event as a small filled chart, with a red line at the current time. All three use one coordinate system, 1000 units wide, stretched to the slider's width. In the script:
+
+```js
+	// The wet-area chart and the tick marks share one coordinate system with the slider.
+	const W = 1000, H = 40;
+	const x = (band) => (band / last) * W;
+	let peak = $derived(info ? Math.max(...info.wet_km2) : 1);
+	let area = $derived(
+		info
+			? `M0,${H} ` + info.wet_km2.map((a, i) => `L${x(i).toFixed(1)},${(H - (a / peak) * (H - 4)).toFixed(1)}`).join(' ') + ` L${W},${H} Z`
+			: ''
+	);
+	let labelled = $derived(info ? info.steps.map((_, i) => i).filter((i) => i % 12 === 0) : []);
+```
+
+Replace the `<input type="range" …>` with:
+
+```svelte
+		<div class="axis">
+			<svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" aria-hidden="true">
+				<path class="area" d={area} />
+				<line class="now-line" x1={x(layer.band)} x2={x(layer.band)} y1="0" y2={H} />
+			</svg>
+
+			<input type="range" min="0" max={last} step="1" bind:value={layer.band} oninput={stop} aria-label="Time" />
+
+			<svg class="ticks" viewBox="0 0 {W} 8" preserveAspectRatio="none" aria-hidden="true">
+				{#each info.steps as _, i (i)}
+					<line x1={x(i)} x2={x(i)} y1="0" y2={i % 12 === 0 ? 8 : 4} />
+				{/each}
+			</svg>
+			<div class="labels">
+				{#each labelled as i (i)}
+					<span style:left="{(i / last) * 100}%">{time(i)}</span>
+				{/each}
+			</div>
+		</div>
+```
+
+`preserveAspectRatio="none"` stretches the drawing to any width; `vector-effect: non-scaling-stroke` keeps the lines thin while it stretches. Replace the `input[type='range']` rule in the style with:
+
+```css
+	.axis {
+		position: relative;
+		margin-top: 0.35rem;
+	}
+	.axis svg,
+	.labels {
+		display: block;
+		width: calc(100% - 16px);
+		margin: 0 8px;
+	}
+	.axis svg:first-child {
+		height: 2.2rem;
+	}
+	.area {
+		fill: #c6dbef;
+		stroke: #3182bd;
+		stroke-width: 1.5;
+		vector-effect: non-scaling-stroke;
+	}
+	.now-line {
+		stroke: #c62828;
+		stroke-width: 2;
+		vector-effect: non-scaling-stroke;
+	}
+	input {
+		display: block;
+		width: 100%;
+		margin: 0.15rem 0 0;
+	}
+	.ticks {
+		height: 8px;
+	}
+	.ticks line {
+		stroke: #888;
+		stroke-width: 1;
+		vector-effect: non-scaling-stroke;
+	}
+	.labels {
+		position: relative;
+		height: 1rem;
+	}
+	.labels span {
+		position: absolute;
+		transform: translateX(-50%);
+		font-size: 0.72rem;
+		color: #444;
+		font-variant-numeric: tabular-nums;
+	}
+```
+
+(The `8px` margins keep the chart's ends above the ends of the slider's track.) Give `.bar` a bit more room at the bottom for the labels: `padding: 0.45rem 0.9rem 1.3rem;`.
+
+**You see:** a blue curve rising to its peak around *Time 59:00*, the red line moving with the slider, and *0:00, 12:00, 24:00 …* under it.
+
+### 8.I · Click: the depth at this hour
+
+In `scenario.js`:
+
+```js
+// The depth at one place at the shown time step, in metres (null: dry or no data).
+// Unlike the colour function, locationValues() applies the file's scale factor for us:
+// it returns metres (0.84), not centimetres (84), and NaN where the file says "no data".
+export async function floodDepthAtStep(lngLat) {
+	const values = await locationValues(TIMESERIES_URL, { latitude: lngLat.lat, longitude: lngLat.lng }, 16);
+	const depth = values[shownBand];
+	return Number.isFinite(depth) && depth >= DEPTH_CLASSES[0][0] ? depth : null;
+}
+```
+
+In `MapLibreMap.svelte`, import `floodDepthAtStep` and `timeseriesInfo`, and in the general click handler, **before** the `layers.flood.visible` case:
+
+```js
+				} else if (layers.floodTime.visible) {
+					// The depth at this place at the time on the slider.
+					const [depth, info] = await Promise.all([floodDepthAtStep(e.lngLat), timeseriesInfo()]);
+					const hours = (info.steps[layers.floodTime.band] * info.minutes_per_step) / 60;
+					const text = depth == null ? 'Dry at this moment' : `Flood depth: <strong>${depth.toFixed(2)} m</strong>`;
+					new maplibregl.Popup().setLngLat(e.lngLat).setHTML(`${text}<br><small>100-year scenario, Time ${hours}:00</small>`).addTo(m);
+```
+
+**You see:** click the water at *Time 59:00*: its depth then; at *Time 10:00*: less, or *Dry at this moment*. That's the reference of this step. Commit.
+
+
+---
+
 [Step 9 · Containers →](09-containers.md)

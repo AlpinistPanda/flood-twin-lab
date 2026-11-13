@@ -108,7 +108,7 @@ server {
     }
 ```
 
-Why the `resolver` and the variable, instead of simply `proxy_pass http://api:8000`? With a fixed name, nginx looks up the API's address **once**, when it starts. It then refuses to start while the API is down, and keeps using an old address after the API container is recreated. `127.0.0.11` is Docker's own name server; with a variable, nginx asks it again every 10 seconds.
+Why the `resolver` and the variable, instead of simply `proxy_pass http://api:8000`? With a fixed name, nginx looks up the API's address **once**, when it starts. It then refuses to start while the API is down, taking the whole twin offline, and it would keep using an old address if a recreated API container got a new one. `127.0.0.11` is Docker's own name server; with a variable, nginx asks it again every 10 seconds.
 
 **c · File types.** nginx doesn't know `.mjs` (the MapLibre worker, 9.2) and would send it as a download, which browsers refuse to run as a worker:
 
@@ -617,3 +617,364 @@ export default defineConfig({
 - **Another map engine.** The branches `extra/cesium` and `extra/deck` add a 3D page with CesiumJS or deck.gl on top of step 9. See how little they change: `git diff step-9 extra-deck --stat`.
 - **Your own data.** Replace the API with one for your city's sensors (see [Using another API](api.md#using-another-api)), and the flood files with your own model's output (step 7, *Going further*).
 - **Share it.** Push your images to a registry (GitHub Container Registry, Docker Hub), so others can run your exact version with `docker compose up`, without building.
+
+---
+
+## Walkthrough: step 9 in small pieces, with all the code
+
+Stop the dev server. Keep the API running in terminal 1 until 9.H.
+
+### 9.A · A production build, and a surprise
+
+In `app/`:
+
+```bash
+npm uninstall @sveltejs/adapter-auto
+npm install -D @sveltejs/adapter-static@4.0.1
+```
+
+In `app/vite.config.js`, change the first line to:
+
+```js
+import adapter from '@sveltejs/adapter-static';
+```
+
+and the adapter line to:
+
+```js
+			// Build the app into plain files (HTML, JS, CSS) in build/. Every page is rendered in the
+			// browser (ssr = false), so one fallback page is enough: the server answers every
+			// address with index.html, and the app shows the right page.
+			adapter: adapter({ fallback: 'index.html' })
+```
+
+Build it, and look at the result with Vite's preview server, which serves `build/` as a real server would (and uses the same `/api` proxy):
+
+```bash
+npm run build
+ls build
+npm run preview
+```
+
+Open port **4173**.
+
+**You see:** the header, the banner and the status work, the Layers box is there... but the **map is empty**. The console (F12) shows an error about a **worker**. The dev server served MapLibre's worker file from `node_modules`; the build left it behind. Stop the preview (Ctrl+C).
+
+### 9.B · Bring the worker along
+
+Create **`app/src/lib/maplibre-worker.js`**:
+
+```js
+// MapLibre does its heavy work in a web worker, loaded from a separate file. The production
+// build bundles MapLibre into new files and leaves the worker file behind.
+// `?url` asks Vite to copy the worker file into the build and give us its address,
+// and setWorkerUrl() tells MapLibre where to find it.
+import { setWorkerUrl } from 'maplibre-gl';
+import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
+
+setWorkerUrl(workerUrl);
+```
+
+At the top of `MapLibreMap.svelte`, after the `maplibre-gl` import:
+
+```js
+	import '#lib/maplibre-worker.js'; // so the map also works in the production build
+```
+
+```bash
+npm run build
+npm run preview
+```
+
+**You see:** on port 4173 the whole twin works, from the built files. `ls build/_app/immutable/assets` shows a file `maplibre-gl-worker.….mjs`. Stop the preview.
+
+### 9.C · nginx serves the app, in a container
+
+Create **`app/nginx.conf`** with only the essentials:
+
+```nginx
+server {
+    listen 80;
+    root /usr/share/nginx/html;
+
+    # Every other address is a page of the app: answer with index.html, the app does the rest.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+Create **`app/Dockerfile`**:
+
+```dockerfile
+# Stage 1: build the app with Node.js
+FROM node:26-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+# Stage 2: serve the built files with nginx. Only this stage ends up in the image.
+FROM nginx:1-alpine
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/build /usr/share/nginx/html
+EXPOSE 80
+```
+
+and **`app/.dockerignore`**:
+
+```
+node_modules
+build
+.svelte-kit
+```
+
+Build the image and run it, in `app/`:
+
+```bash
+docker build -t flood-twin-app:test .
+docker run --rm -p 8080:80 flood-twin-app:test
+```
+
+**You see:** port 8080: the header and the Layers box, but two problems. A **red *Feed lost***: of course, nginx doesn't know the API yet, and answers `/api/live` with `index.html`. And an **empty map** again, with a console error about the worker: nginx doesn't know the `.mjs` file type, and sends the worker as `application/octet-stream`. Browsers only run a worker that is sent as JavaScript. Stop it with Ctrl+C.
+
+Tell nginx about `.mjs`. In `app/nginx.conf`, inside `server { … }`, above `location /`:
+
+```nginx
+    # MapLibre's web worker is a .mjs file. nginx doesn't know that extension and would send it
+    # as "application/octet-stream"; browsers refuse to run a worker that isn't JavaScript.
+    location ~ \.mjs$ {
+        types { }
+        default_type application/javascript;
+        try_files $uri =404;
+    }
+```
+
+```bash
+docker build -t flood-twin-app:test .
+docker run --rm -p 8080:80 flood-twin-app:test
+```
+
+**You see:** the map is back. Still *Feed lost*: that's 9.F. Stop with Ctrl+C.
+
+Run `docker build` a second time: almost every line says `CACHED`, and it's done in a second. Change a `.svelte` file and build again: `npm ci` is still `CACHED`, only the steps after `COPY . .` run again.
+
+### 9.D · The API in a container
+
+Create **`api/Dockerfile`**:
+
+```dockerfile
+# Built from the repository folder (see docker-compose.yml), because it needs both api/ and data/.
+# The data goes INSIDE the image: whoever runs this image gets exactly the same 30 days.
+FROM python:3.15-slim
+
+WORKDIR /srv
+
+# 1. Dependencies first, so Docker can cache them.
+COPY api/requirements.txt api/
+RUN pip install --no-cache-dir -r api/requirements.txt
+
+# 2. Then the data and the code.
+COPY data/ data/
+COPY api/ api/
+
+# 3. Don't run as root.
+RUN useradd --create-home twin
+USER twin
+
+EXPOSE 8000
+
+# 4. How Docker knows the API is healthy (not just started): ask /health every 10 s.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"
+
+CMD ["python", "api/main.py"]
+```
+
+and, in the **repository folder**, **`.dockerignore`**:
+
+```
+*
+!api/
+!data/
+```
+
+Stop the API in terminal 1 (port 8000 must be free), then in the repository folder:
+
+```bash
+docker build -f api/Dockerfile -t flood-twin-api:test .
+docker run --rm -p 8000:8000 flood-twin-api:test
+```
+
+**You see:** port 8000 with `/docs`: the API, now from a container. After about 10 s, `docker ps` (in another terminal) says `(healthy)`. Stop it with Ctrl+C.
+
+### 9.E · Both together: Docker Compose
+
+Create **`docker-compose.yml`** in the repository folder:
+
+```yaml
+# The whole twin as services, started with one command:  docker compose up --build
+
+services:
+  # The sensor API. No "ports": only the other services can reach it, by its name: http://api:8000
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: flood-twin-api:1.0
+    environment:
+      REPLAY_START: ${REPLAY_START:-2026-11-04T03:00}
+      REPLAY_SPEED: ${REPLAY_SPEED:-60}
+    restart: unless-stopped # crashed? Docker starts it again
+
+  # The web app: nginx serving the built app, and passing /api on to the API.
+  app:
+    build: ./app
+    image: flood-twin-app:1.0
+    ports:
+      - "8080:80" # port 8080 on your machine → port 80 in the container
+    depends_on:
+      api:
+        condition: service_healthy # wait until the API's health check passes
+    restart: unless-stopped
+```
+
+```bash
+docker compose up --build
+```
+
+**You see:** both services start; `app` waits until `api` is healthy. Port 8080: still *Feed lost*. Both containers run, but nginx doesn't pass `/api` on yet. Stop with Ctrl+C.
+
+### 9.F · nginx passes `/api` on: the simple way, and its weak spot
+
+Add to `app/nginx.conf`, inside `server { … }`:
+
+```nginx
+    location /api/ {
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass http://api:8000;
+    }
+```
+
+```bash
+docker compose up --build -d
+```
+
+(`-d`: in the background. `docker compose logs -f` shows the logs, `docker compose ps` the services.)
+
+**You see:** port 8080: *Live*! The whole twin works from containers.
+
+Now an ordinary day at work: the API is stopped for maintenance, and meanwhile the web server restarts (an update, a reboot):
+
+```bash
+docker compose stop api
+docker compose restart app
+docker compose ps
+docker compose logs app | tail -3
+```
+
+**You see:** `app` keeps *Restarting*, and its log says `host not found in upstream "api"`. nginx looks up the name `api` **once, when it starts**, and refuses to start when it can't. Reload port 8080: **nothing at all**, not even a *Feed lost* page. A problem in the API has taken the whole twin offline. Start the API again (`docker compose start api`), and nginx recovers.
+
+### 9.G · nginx passes `/api` on: the robust way
+
+Replace the `location /api/` block with:
+
+```nginx
+    # Find the API by its name on the Compose network, and look the name up again every 10 s.
+    # Without this, nginx looks it up once at start: it refuses to start while the API is down,
+    # and would keep using an old address if the API container got a new one.
+    resolver 127.0.0.11 valid=10s;
+    set $api http://api:8000;
+
+    # /api/live → http://api:8000/live (the same as the proxy in vite.config.js)
+    location /api/ {
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass $api;
+        proxy_read_timeout 10s;
+    }
+```
+
+`127.0.0.11` is Docker's own name server. With the address in a variable, nginx looks it up when a request comes in, and again every 10 seconds, instead of once at start.
+
+Rebuild, then repeat the same test:
+
+```bash
+docker compose up --build -d
+docker compose stop api
+docker compose restart app
+docker compose ps
+```
+
+**You see:** `app` is *Up*. Port 8080 shows the twin with *Feed lost* and *Flood warnings unknown*: the page tells the truth instead of disappearing. `docker compose start api`: *Live* again within 10 s, without touching nginx.
+
+### 9.H · Caching and compression
+
+The flood layers. Browsers must **ask** whether a layer has changed (`no-cache`), and keep **no** copy of the COGs (`no-store`), or a rebuilt container can leave the flood layer empty:
+
+```nginx
+    location /layers/ {
+        types {
+            image/tiff tif;
+            application/geo+json geojson;
+            application/json json;
+        }
+        add_header Cache-Control "no-cache";
+
+        location ~ \.tif$ {
+            add_header Cache-Control "no-store";
+        }
+    }
+
+    # Compress text on the way out (not the .tif: it is already compressed).
+    gzip on;
+    gzip_types application/json application/geo+json application/javascript text/css;
+```
+
+```bash
+docker compose up --build -d
+curl -I http://localhost:8080/layers/depth_timeseries_100yr.json
+curl -I http://localhost:8080/layers/depth_timeseries_100yr.tif
+```
+
+**You see:** `Cache-Control: no-cache` for the JSON, `no-store` for the `.tif`. In the browser: both flood layers and the time bar work.
+
+`docker compose down` stops everything.
+
+### 9.I · Break it
+
+```bash
+docker compose stop api       # an operator stops the API
+docker compose start api      # and starts it again
+docker compose exec api python -c "import os, signal; os.kill(1, signal.SIGTERM)"   # a crash
+docker compose ps             # the API comes back by itself
+```
+
+**You see:** *Feed lost* after the stop, *Live* within 10 s after the start; after the crash, the API restarts by itself (`restart: unless-stopped`) and is *healthy* again after a few seconds.
+
+### 9.J · The load test
+
+Add a third service to `docker-compose.yml`, under `services:`:
+
+```yaml
+  # Optional: a load test. Only starts with:  docker compose --profile loadtest up
+  loadtest:
+    image: locustio/locust:2.47.0
+    profiles: [loadtest]
+    volumes:
+      - ./loadtest:/mnt/locust
+    command: -f /mnt/locust/locustfile.py --host http://app
+    ports:
+      - "8089:8089" # Locust's web page
+    depends_on:
+      - app
+```
+
+```bash
+docker compose --profile loadtest up -d loadtest
+```
+
+**You see:** port 8089, Locust. 1,000 users, spawn rate 100, **Start**. After a minute, the **Statistics** tab: which request is slowest? Stop with `docker compose stop loadtest`, and everything with `docker compose down`.
+
+That's the reference of this step, and the whole twin. Commit.
+

@@ -544,4 +544,336 @@ export function showAge(seconds) {
 
 ---
 
+## Walkthrough: step 3 in small pieces, with all the code
+
+Start the API in the middle of the rain event, so there is water to see:
+
+```bash
+REPLAY_START=2026-11-04T15:00 python api/main.py
+```
+
+### 3.A · The rules, at the top of `sensors.js`
+
+Put this at the **top** of `app/src/lib/sensors.js`, above `toGeoJSON`:
+
+```js
+// ── From a number to a decision ───────────────────────────────────────────────
+
+// Water depth on a street, in metres (teaching values, not an official standard).
+// Ordered from the most to the least severe.
+export const THRESHOLDS = [
+	{ level: 'danger', depth_m: 0.5 },
+	{ level: 'warning', depth_m: 0.3 },
+	{ level: 'watch', depth_m: 0.15 }
+];
+
+// A sensor leaves a level only when the water drops this much BELOW its threshold.
+export const HYSTERESIS_M = 0.05;
+
+// A reading older than this is not "now" any more.
+export const STALE_AFTER_S = 30 * 60;
+
+// Readings below this can't be water depth: the sensor or its calibration is wrong.
+export const SUSPECT_BELOW_M = -0.1;
+
+// Every level, with its colour. The map and the table both use this.
+export const LEVELS = {
+	danger: { label: 'Danger', colour: '#c62828' },
+	warning: { label: 'Warning', colour: '#ef6c00' },
+	watch: { label: 'Watch', colour: '#f9c80e' },
+	dry: { label: 'Dry', colour: '#5b8db8' },
+	suspect: { label: 'Suspect', colour: '#8e5bb5' },
+	stale: { label: 'No recent data', colour: '#b0b0b0' }
+};
+```
+
+**You see:** nothing changes yet. Just check the browser console stays free of errors.
+
+### 3.B · A depth becomes a level (no hysteresis yet)
+
+Below the constants:
+
+```js
+// The water level for a depth.
+export function waterLevel(depth) {
+	for (const t of THRESHOLDS) {
+		if (depth >= t.depth_m) return t.level;
+	}
+	return 'dry';
+}
+```
+
+Test it in the terminal, in `app/`:
+
+```bash
+node -e "
+import('./src/lib/sensors.js').then(({ waterLevel }) => {
+  for (const d of [0, 0.14, 0.15, 0.31, 0.5, 2]) console.log(d, waterLevel(d));
+});"
+```
+
+**You see:** `0 dry`, `0.14 dry`, `0.15 watch`, `0.31 warning`, `0.5 danger`, `2 danger`.
+
+### 3.C · Hysteresis
+
+Replace `waterLevel` with the version that remembers the previous level:
+
+```js
+const RANK = { dry: 0, watch: 1, warning: 2, danger: 3 };
+
+// The water level for a depth, given the level the sensor had last time.
+export function waterLevel(depth, previous = 'dry') {
+	for (const t of THRESHOLDS) {
+		// Already at this level (or higher) last time? Then use the lower "leave" threshold.
+		const alreadyThere = (RANK[previous] ?? 0) >= RANK[t.level];
+		const threshold = alreadyThere ? t.depth_m - HYSTERESIS_M : t.depth_m;
+		if (depth >= threshold) return t.level;
+	}
+	return 'dry';
+}
+```
+
+```bash
+node -e "
+import('./src/lib/sensors.js').then(({ waterLevel }) => {
+  let level = 'dry';
+  for (const d of [0.28, 0.31, 0.29, 0.31, 0.27, 0.29, 0.24]) {
+    level = waterLevel(d, level);
+    console.log(d, level, '   without hysteresis:', waterLevel(d, 'dry'));
+  }
+});"
+```
+
+**You see:** with hysteresis: *watch, warning, warning, warning, warning, warning, watch*. Without: *watch, warning, watch, warning, watch, watch, watch*.
+
+### 3.D · Trust first: `classify`
+
+Below `waterLevel`:
+
+```js
+// The full status of one sensor: first "can we trust this reading?", then "how deep is it?".
+export function classify(site, reading, previous) {
+	if (!reading || reading.age_s > STALE_AFTER_S) return 'stale';
+	if (reading.depth_m < SUSPECT_BELOW_M || reading.depth_m > site.sensor_height_m) return 'suspect';
+	return waterLevel(reading.depth_m, previous);
+}
+```
+
+### 3.E · A Level column in the table
+
+In `+page.svelte`, import the new things:
+
+```js
+	import { toGeoJSON, classify, LEVELS, showTime, showAge } from '#lib/sensors.js';
+```
+
+Keep each sensor's level, and count how often it changes. After `let live = …`:
+
+```js
+	// The level of each sensor, and how often it changed since you opened the page.
+	// We keep the previous levels because hysteresis needs them.
+	let levels = $state({});
+	let changes = $state({});
+```
+
+A function that computes all levels, after `load`:
+
+```js
+	function updateLevels() {
+		const next = {};
+		for (const site of sites) {
+			const level = classify(site, readingFor(site.id), levels[site.id]);
+			if (levels[site.id] && levels[site.id] !== level) changes[site.id] = (changes[site.id] ?? 0) + 1;
+			next[site.id] = level;
+		}
+		levels = next;
+	}
+```
+
+Call it in `load()`, right after `live = await liveRes.json();`:
+
+```js
+			updateLevels();
+```
+
+In the table, inside the `{#each}`, after `{@const r = …}`:
+
+```svelte
+				{@const level = levels[site.id] ?? 'stale'}
+```
+
+and a cell after the depth:
+
+```svelte
+					<td><i style:background={LEVELS[level].colour}></i>{LEVELS[level].label}</td>
+```
+
+with `<th>Level</th>` in the header. In the `<style>`, make the `<i>` a little coloured dot:
+
+```css
+	i {
+		display: inline-block;
+		width: 0.8rem;
+		height: 0.8rem;
+		border-radius: 50%;
+		margin-right: 0.35rem;
+		vertical-align: -0.1rem;
+	}
+```
+
+**You see:** every row has a level: TBM-01 *No recent data*, TBM-14 *Suspect*, several *Warning* or *Danger*.
+
+### 3.F · The Changes column
+
+A last column, with `<th>Changes</th>`:
+
+```svelte
+					<td>{changes[site.id] ?? 0}</td>
+```
+
+Grey out rows you can't trust: on the `<tr>`, add `class:faded={level === 'stale' || level === 'suspect'}`, and in the CSS `.faded { color: #888; }`.
+
+**You see:** press **Refresh** every few seconds for a minute: some counters go up.
+
+### 3.G · Colours on the map
+
+In `sensors.js`, give every feature its level and colour. Change `toGeoJSON`:
+
+```js
+export function toGeoJSON(sites, live, levels = {}) {
+	return {
+		type: 'FeatureCollection',
+		features: sites.map((site) => {
+			const r = live?.readings.find((r) => r.site === site.id);
+			const level = levels[site.id] ?? 'stale';
+			return {
+				type: 'Feature',
+				geometry: { type: 'Point', coordinates: [site.lon, site.lat] },
+				properties: {
+					id: site.id,
+					type: site.type,
+					depth_m: r?.depth_m ?? null,
+					time: r?.time ?? null,
+					age_s: r?.age_s ?? null,
+					level,
+					colour: LEVELS[level].colour
+				}
+			};
+		})
+	};
+}
+```
+
+In `+page.svelte`, pass the levels: `let geojson = $derived(toGeoJSON(sites, live, levels));`
+
+In `MapLibreMap.svelte`, the `sensor-dots` layer takes its colour from the data, and draws the most severe on top:
+
+```js
+			m.addLayer({
+				id: 'sensor-dots',
+				type: 'circle',
+				source: 'sensors',
+				layout: {
+					// Draw the most severe sensors on top.
+					'circle-sort-key': ['match', ['get', 'level'], 'danger', 3, 'warning', 2, 'watch', 1, 0]
+				},
+				paint: {
+					'circle-radius': 7,
+					'circle-color': ['get', 'colour'], // each feature carries its own colour
+					'circle-stroke-width': 1.5,
+					'circle-stroke-color': '#ffffff'
+				}
+			});
+```
+
+Add the level to the popup: import `LEVELS` from `#lib/sensors.js`, and change the popup's first line to:
+
+```js
+						`<strong>${p.id}</strong> · ${p.type} · <strong>${LEVELS[p.level].label}</strong><br>
+```
+
+**You see:** yellow, orange, red, blue, purple and grey dots, the same colours as in the table.
+
+### 3.H · The alert banner
+
+In the script of `+page.svelte`, after `geojson`:
+
+```js
+	// The alert banner: every sensor at warning or danger, most severe first.
+	let alerts = $derived(
+		sites
+			.filter((s) => levels[s.id] === 'danger' || levels[s.id] === 'warning')
+			.sort((a, b) => (levels[b.id] === 'danger') - (levels[a.id] === 'danger'))
+	);
+	let untrusted = $derived(sites.filter((s) => levels[s.id] === 'stale' || levels[s.id] === 'suspect').length);
+```
+
+Above the map:
+
+```svelte
+	{#if live}
+		<div class="banner" class:alert={alerts.length > 0}>
+			{#if alerts.length > 0}
+				<strong>{alerts.length} {alerts.length === 1 ? 'sensor' : 'sensors'} at warning or danger:</strong>
+				{#each alerts as site, i (site.id)}
+					{i > 0 ? ', ' : ''}{site.id} ({readingFor(site.id).depth_m} m)
+				{/each}
+			{:else}
+				<strong>No flood warnings.</strong>
+			{/if}
+			<span class="note">{untrusted} of {sites.length} sensors have no recent or no trustworthy data.</span>
+		</div>
+	{/if}
+```
+
+and its style:
+
+```css
+	.banner {
+		padding: 0.6rem 0.9rem;
+		margin-bottom: 0.8rem;
+		border-radius: 6px;
+		background: #e8f1f8;
+		border-left: 5px solid #5b8db8;
+	}
+	.banner.alert {
+		background: #fdecea;
+		border-left-color: #c62828;
+	}
+	.note {
+		display: block;
+		font-size: 0.85rem;
+		color: #555;
+		margin-top: 0.2rem;
+	}
+```
+
+**You see:** a red banner: *5 sensors at warning or danger: TBM-…*, *Danger* first. Restart the API without `REPLAY_START` (before the rain): a blue banner, *No flood warnings.*
+
+### 3.I · The legend
+
+Under `<MapLibreMap {geojson} />`:
+
+```svelte
+	<p class="legend">
+		{#each Object.entries(LEVELS) as [key, l] (key)}
+			<span><i style:background={l.colour}></i>{l.label}</span>
+		{/each}
+	</p>
+```
+
+```css
+	.legend {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem 1rem;
+		font-size: 0.85rem;
+	}
+```
+
+**You see:** the six levels with their colours under the map. The page now matches the reference above. Commit.
+
+
+---
+
 [Step 4 · Live updates →](04-live.md)
