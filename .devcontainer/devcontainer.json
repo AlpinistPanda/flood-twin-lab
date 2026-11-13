@@ -8,10 +8,12 @@
     "ghcr.io/devcontainers/features/docker-in-docker:2": { "moby": false }
   },
   "postCreateCommand": "pip install -r api/requirements.txt && npm install -g npm@12 && cd app && npm install",
-  "forwardPorts": [5173, 8000],
+  "forwardPorts": [5173, 8000, 8080, 8089],
   "portsAttributes": {
     "5173": { "label": "Flood viewer (dev server)", "onAutoForward": "openBrowser" },
-    "8000": { "label": "Sensor API", "onAutoForward": "silent" }
+    "8000": { "label": "Sensor API", "onAutoForward": "silent" },
+    "8080": { "label": "Flood twin in Docker (step 9)", "onAutoForward": "notify" },
+    "8089": { "label": "Locust load test (step 9)", "onAutoForward": "notify" }
   },
   "customizations": {
     "vscode": {

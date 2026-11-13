@@ -1,0 +1,41 @@
+# Step 9: the whole twin as services, started with one command:
+#
+#   docker compose up --build
+#
+# Then open port 8080. Stop with Ctrl+C, or `docker compose down`.
+
+services:
+  # The sensor API (Python). No "ports": it is NOT reachable from outside, only by the
+  # other services on the Compose network, by its name: http://api:8000
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: flood-twin-api:1.0
+    environment:
+      REPLAY_START: ${REPLAY_START:-2026-11-04T03:00}
+      REPLAY_SPEED: ${REPLAY_SPEED:-60}
+    restart: unless-stopped # crashed? Docker starts it again
+
+  # The web app: nginx serving the built SvelteKit app, and passing /api on to the API.
+  app:
+    build: ./app
+    image: flood-twin-app:1.0
+    ports:
+      - "8080:80" # port 8080 on your machine → port 80 in the container
+    depends_on:
+      api:
+        condition: service_healthy # wait until the API's health check passes
+    restart: unless-stopped
+
+  # Optional: a load test. Only starts with:  docker compose --profile loadtest up
+  loadtest:
+    image: locustio/locust:2.47.0
+    profiles: [loadtest]
+    volumes:
+      - ./loadtest:/mnt/locust
+    command: -f /mnt/locust/locustfile.py --host http://app
+    ports:
+      - "8089:8089" # Locust's web page
+    depends_on:
+      - app

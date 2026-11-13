@@ -1,6 +1,7 @@
 <script>
 	import { onMount, mount, unmount } from 'svelte';
 	import * as maplibregl from 'maplibre-gl';
+	import '#lib/maplibre-worker.js'; // step 9: so the map also works in the production build
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import SensorDetail from '#lib/SensorDetail.svelte';
 	import {

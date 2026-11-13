@@ -527,4 +527,160 @@ Watch the chart above the slider: the wet area jumps from 3.4 km² to 10.4 km² 
 
 ## Step 9 · The whole twin in containers → `step-9`
 
-*Coming next.*
+**Goal:** package the twin so that *anyone* can run exactly what you built, with one command, on any machine with Docker: a colleague's laptop, a server, the cloud. This is Lab 7B.
+
+### The setup
+
+```mermaid
+flowchart LR
+  browser(["Your browser"])
+  tiles["Basemap tiles<br/>OpenFreeMap · OSM<br/><i>outside the twin</i>"]
+
+  subgraph host["Your laptop or Codespace"]
+    subgraph net["docker compose up · one private network"]
+      app["<b>app</b> container<br/>nginx<br/>the built web app<br/>+ flood layers (.tif, .geojson)"]
+      api["<b>api</b> container<br/>Python · FastAPI<br/>+ 30 days of sensor data"]
+      lt["<b>loadtest</b> container<br/>Locust · optional"]
+    end
+  end
+
+  browser -- "port 8080" --> app
+  app -- "/api/… → http://api:8000" --> api
+  browser -. "port 8089" .-> lt
+  lt -. "simulated users" .-> app
+  browser -.-> tiles
+```
+
+Two containers make the twin; a third one is optional:
+
+| Service | Image | What it does | Reachable from outside? |
+|---|---|---|---|
+| `api` | `flood-twin-api:1.0`, from `api/Dockerfile` | The sensor API, with the data inside the image | **No.** Only the `app` container can reach it, by its name `api` |
+| `app` | `flood-twin-app:1.0`, from `app/Dockerfile` | nginx: serves the built app and the flood layers, passes `/api/…` on to `api` | Yes, port **8080** |
+| `loadtest` | `locustio/locust` | Simulates many users (optional, see below) | Port **8089** |
+
+### What changed
+
+| File | What it is |
+|---|---|
+| `docker-compose.yml` | **New.** The whole twin as services |
+| `api/Dockerfile` | **New.** The API image: Python, the packages, the code **and the data** |
+| `app/Dockerfile` | **New.** Two stages: Node.js **builds** the app, nginx **serves** it |
+| `app/nginx.conf` | **New.** What the Vite dev server did in development: serve the app, forward `/api` |
+| `.dockerignore`, `app/.dockerignore` | **New.** What Docker may *not* copy into a build (`node_modules`, …) |
+| `loadtest/locustfile.py` | **New.** The optional load test |
+| `app/vite.config.js` | `adapter-static`: the app is built into plain files |
+| `app/src/lib/maplibre-worker.js` | **New.** Tells MapLibre where its worker file is in the production build |
+| `.devcontainer/devcontainer.json` | Forwards ports 8080 and 8089 too |
+
+### Run it
+
+Stop the two terminals from the earlier steps (Ctrl+C), then:
+
+```bash
+docker compose up --build
+```
+
+The first build takes a few minutes. When the log goes quiet, open port **8080**: the same app, now served from containers. Stop it with Ctrl+C.
+
+In a second terminal, look around:
+
+```bash
+docker compose ps                  # the running services and their health
+docker compose logs api            # the API's output
+docker images | grep flood-twin    # the two images you built, and their size
+```
+
+### Dev container vs production images
+
+Remember the table at the top of this walkthrough? Now you have both:
+
+| | Dev container (step 0) | Production images (now) |
+|---|---|---|
+| Contains | Node, Python, Docker, editor tools: everything to **build** | Only what is needed to **run** |
+| Web app | The Vite dev server, with hot reload | nginx + 24 MB of built files: a **124 MB** image. The Node.js build stage, with its `node_modules`, is thrown away |
+
+### Three ideas to take away
+
+**1 · The image is the machine.** "It works on my machine" is not reproducible; an image is. `api/Dockerfile` even puts the **data** inside the image, so everyone who runs `flood-twin-api:1.0` replays exactly the same 30 days.
+
+**2 · Only expose what must be exposed.** The `api` service has no `ports`. Nobody outside can reach it; only nginx can, over Compose's private network, using the name `api`. One public door instead of two.
+
+**3 · Development shortcuts don't survive production.** Two things that "just worked" in development broke in the production build, and both are typical:
+
+- MapLibre's web worker was left out of the build, so the map stayed empty. Fixed in `maplibre-worker.js`.
+- nginx didn't know the `.mjs` file type and sent the worker as a download; browsers refused to run it. Fixed in `nginx.conf`.
+
+You only find these by running the real image. That is why you test the container, not just the code.
+
+### Break it on purpose
+
+With the twin running, in a second terminal:
+
+```bash
+docker compose stop api      # the API is gone
+```
+
+Watch the app: *Delayed*, then *Feed lost* after 30 s (step 4). Then:
+
+```bash
+docker compose start api
+```
+
+Within about 10 s the app is *Live* again, without reloading the page and without restarting nginx (see the `resolver` line in `nginx.conf`). If the API **crashes** instead of being stopped, `restart: unless-stopped` starts it again by itself.
+
+### Caching: who has the latest file?
+
+nginx tells browsers how to cache the flood layers, in `nginx.conf`: `Cache-Control: no-cache`. Despite its name, that does not stop caching: the browser keeps its copy, but asks each time "has this changed?". If not, nginx answers **304 Not Modified** without sending the file again, which is almost free.
+
+We learned this the hard way. At first the setting was `max-age=3600`: "keep it for an hour without asking". Then we replaced a layer file under the **same name**, and browsers that had seen the old one kept showing it for up to an hour. The server was right; the browsers were out of date. The other common fix is to put a version in the file name (`depth_timeseries_v2.tif`), so a new file gets a new address.
+
+The COG files get an even stricter rule: `no-store`, keep no copy at all. With an old copy, the browser asks for a *piece* of the file "only if it hasn't changed" (an `If-Range` request). After a rebuild of the container, the file has a new version tag, so nginx answers with the **whole** file instead of the piece, and the COG plugin can't use that: the flood layer stays empty until the next reload. We only found this by rebuilding and reloading many times.
+
+See the headers for yourself:
+
+```bash
+curl -I http://localhost:8080/layers/depth_timeseries_100yr.json
+curl -I http://localhost:8080/layers/depth_timeseries_100yr.tif
+```
+
+### Optional: how many people can it take?
+
+```bash
+docker compose --profile loadtest up --build
+```
+
+Open port **8089** (Locust). Each simulated user behaves like the real app: opens the page, asks for `/api/live` every 10 s, and now and then opens a sensor's Month chart. Start with 100 users, then try 1,000.
+
+On a laptop, 200 users made 1,000 requests in 30 seconds without a single failure, typically 21 ms per request. In a Codespace (2 cores, shared with Locust itself) the numbers will be lower. What matters is which request slows down first, and why.
+
+### Try
+
+- Limit the API to half a CPU: add `cpus: 0.5` under `api:` in `docker-compose.yml`, run `docker compose up -d`, and run the load test again.
+- Start the twin at the 6 November event: `REPLAY_START=2026-11-06T00:00 docker compose up`. Follow that setting from the command line to the code.
+- Change a line in `api/main.py` and rebuild. Which build steps say `CACHED`, and why?
+
+### Questions
+
+- The data is inside the API image. What changes when the data is updated every day? Where else could it live?
+- The twin is now two images. How would a colleague in Dresden run it without your laptop? (Hint: an image registry.)
+- One machine runs everything. When would that no longer be enough, and what would you need then? (The lecture's last slides: scaling, Kubernetes, and what they cost.)
+
+---
+
+## Extras · two more map engines
+
+Done early? Two optional branches add a second map engine, each as one extra page on top of the finished twin (`step-9`). They change nothing else, so you can compare engines on the same data.
+
+| Tag | Adds | Walkthrough |
+|---|---|---|
+| `extra-cesium` | A **CesiumJS** page: the sensors as columns on a 3D globe | In `STEPS.md` on that tag |
+| `extra-deck` | A **deck.gl** page: 3D columns as GPU layers on a tilted MapLibre map | In `STEPS.md` on that tag |
+
+```bash
+git stash                    # put your own changes aside
+git checkout extra-cesium    # or extra-deck
+cd app && npm install        # the extra engine's packages
+```
+
+The Resilient Hydro Twin started on CesiumJS and moved to MapLibre when stakeholders said they didn't need 3D. Try one, and decide for yourself.

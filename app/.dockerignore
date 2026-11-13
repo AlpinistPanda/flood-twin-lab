@@ -1,0 +1,4 @@
+# Step 9: not needed in the build, and rebuilt inside the image anyway.
+node_modules
+build
+.svelte-kit

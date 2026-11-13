@@ -1,0 +1,6 @@
+# Step 9: what Docker may see when it builds from the repository root (the API image).
+# Everything is ignored, except what the API needs. Without this file Docker would first copy
+# app/node_modules (hundreds of MB) to the build, and throw it away.
+*
+!api/
+!data/
