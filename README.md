@@ -31,8 +31,8 @@ git checkout step-2      # jump to the end of step 2
 
 **In the lab:** follow the brief for your session:
 
-- **[LAB-7A.md](LAB-7A.md)**, Session 1 (40 min): live sensors, alerts and a flood model on a web map
-- **[LAB-7B.md](LAB-7B.md)**, Session 2 (70 min): the whole twin in containers, then stress it
+- **[LAB-7A.md](LAB-7A.md)** (75 min: 14:45–15:30 and 16:00–16:30 IST): live sensors, alerts and a flood model on a web map, then the same twin in 3D
+- **[LAB-7B.md](LAB-7B.md)** (30 min: 17:05–17:35 IST): the whole twin in containers, then stress it
 
 The full step-by-step walkthrough is in **[STEPS.md](STEPS.md)**.
 

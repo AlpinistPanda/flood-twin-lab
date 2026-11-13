@@ -1,9 +1,10 @@
 # Lab 7A · Live sensors, alerts and a flood model on a web map
 
-**Day 7, Wednesday 18 November 2026 · 14:45–15:25 IST (40 minutes)**
+**Day 7, Wednesday 18 November 2026 · 75 minutes in two parts**
+**Part 1:** 14:45–15:30 IST, before the tea break · **Part 2:** 16:00–16:30 IST, after it
 *Task 7: connecting live sensor feeds to a web viewer with active threshold alerts.*
 
-You get a working flood twin of **Tambaram** (Chennai): 33 real water-level sensors, replayed as a live feed, on a MapLibre web map, with alerts and a 100-year flood scenario. In 40 minutes you won't build it from scratch. You **run** it, **change its rules**, **break it**, and put a **flood model next to the measurements**.
+You get a working flood twin of **Tambaram** (Chennai): 33 real water-level sensors, replayed as a live feed, on a MapLibre web map, with alerts and a 100-year flood scenario. You won't build it from scratch. In **part 1** you **run** it, **change its rules**, **break it**, and put a **flood model next to the measurements**. In **part 2** you see the same twin in **3D**, and look at **how it was built**.
 
 Want to see how it was built, step by step? Everything is in [STEPS.md](STEPS.md), one git tag per step. That is for after the lab.
 
@@ -17,6 +18,8 @@ Want to see how it was built, step by step? Everything is in [STEPS.md](STEPS.md
 No GitHub account, or no Codespace? Pair up with your neighbour.
 
 ---
+
+# Part 1 · 14:45–15:30
 
 ## 0 · Start the twin (5 min)
 
@@ -100,7 +103,7 @@ The sensors say what the water **is** doing. A hydrodynamic model says what it *
 
 ---
 
-## Recap (in the room, 3 min)
+## Recap of part 1 (in the room, 5 min)
 
 Be ready to answer one of these:
 
@@ -108,27 +111,70 @@ Be ready to answer one of these:
 2. What is the difference between "no warnings" and "warnings unknown", and where in the app is it handled?
 3. What does the flood model add that the sensors can't give you, and the other way round?
 
-**Keep your Codespace open:** Lab 7B (after the break) continues in it.
+**Leave your Codespace as it is** and enjoy your tea. Part 2 continues in it.
 
 ---
 
-## Done early? Two more map engines
+# Part 2 · 16:00–16:30
 
-The same twin, with a second map engine, as optional branches:
+## 4 · Back after tea (2 min)
+
+A Codespace stops by itself after 30 minutes without activity, so yours may have stopped during the break. Your files are safe.
+
+- If the editor says the Codespace has stopped, click **Restart codespace** (or open it again from **github.com/codespaces**). It takes about half a minute.
+- Start the two terminals again, as in step 0.
+
+---
+
+## 5 · The same twin in 3D (15 min)
+
+The repository has two more map engines, each as an extra page on the same twin. **Half the room takes CesiumJS, the other half deck.gl**, so you can compare in the recap.
+
+In **terminal 2**, stop the web app (**Ctrl+C**), then:
 
 ```bash
-git stash                    # put your own changes aside
-git checkout extra-cesium    # or: git checkout extra-deck
-cd app && npm install        # the engine's packages
+git stash                      # put your own changes aside
+git checkout extra-cesium      # or: git checkout extra-deck
+npm install                    # the engine's packages (you are still in app/)
 npm run dev
 ```
 
-- **`extra-cesium`**: a **CesiumJS** page: the sensors, all buildings in 3D and the flood on a 3D globe.
-- **`extra-deck`**: a **deck.gl** page: the same, as GPU layers on a tilted map.
+The API in terminal 1 keeps running. Open port **5173** again: there is a new page in the top bar.
 
-Compare them with the MapLibre page. Does 3D help you decide where the pumps should go? The Resilient Hydro Twin started on CesiumJS and moved to MapLibre when its users said they didn't need 3D. Would you have decided the same?
+- **`extra-cesium`**: a **CesiumJS** globe. Right-drag (or Ctrl+drag) to tilt, scroll to zoom in on a neighbourhood.
+- **`extra-deck`**: **deck.gl** on a tilted MapLibre map. Ctrl+drag to tilt and turn.
 
-Go back with `git checkout main` (and `npm install` in `app/`).
+**Do:** switch on **Buildings** (now *all* 78,045, grey if not exposed) and, under *Flood depth*, **Over time**. Press ▶ in the time bar and watch the water rise between the buildings.
+
+**Discuss:**
+
+- What does 3D show you that the 2D map didn't? What does it hide (look at the streets behind tall columns)?
+- Every building is 6 m tall, because OpenStreetMap almost never records heights here. Does the 3D view look *true*, or just *real*?
+- The Resilient Hydro Twin started on CesiumJS and moved to MapLibre when its users said they didn't need 3D. For *"where should the pumps go in the next hour?"*, which page would you open?
+
+---
+
+## 6 · How was it built? (8 min)
+
+Everything you used today was built in small steps, one git tag per step. In terminal 2, still in the `app/` folder (stop the app with Ctrl+C first, or open a third terminal and `cd app`):
+
+```bash
+git tag                                        # step-0 … step-9, extra-cesium, extra-deck
+git diff step-9 extra-deck --stat -- src       # the code the deck.gl extra added
+git diff step-4 step-5 --stat -- src          # when the app got pages and the Layers box
+```
+
+**Do:** pick one step from the list in [STEPS.md](STEPS.md) that interests you (for example *step 3: the alert rules*, or *step 8: the flood over time*) and read its section. Find the file it talks about in the editor.
+
+**Discuss:** the deck.gl extra adds a whole map engine in 7 files and about 250 lines of code. What made that possible? (Hint: step 2's *GeoJSON is the common language*, and step 5's *one shared feed*.)
+
+---
+
+## Recap of part 2 (3 min)
+
+Cesium people, deck.gl people: one sentence each. Would you put your engine into a flood twin for Tambaram? For whom?
+
+**Lab 7B** comes after the next lecture, in the same Codespace.
 
 ---
 
@@ -141,4 +187,6 @@ Go back with `git checkout main` (and `npm install` in `app/`).
 | No sensors at *Warning* | You started without `REPLAY_START`: the replay begins before the rain. Restart the API with the command in step 0 |
 | The map is grey | That is the *Feed lost* warning (step 2): start the API |
 | Nothing changes after editing `sensors.js` | Did you save? The app updates on save; the levels change at the next update (every 10 s) |
+| The Codespace has stopped (after the break) | **Restart codespace**, or open it from github.com/codespaces; then start both terminals again |
+| `npm install` on an extra is slow | It downloads the engine (Cesium is large): give it a minute |
 | Lost in your changes | `git stash` puts them aside; `git checkout main` gets the original back |

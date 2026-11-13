@@ -1,6 +1,6 @@
 # Lab 7B · The whole twin in containers, then stress it
 
-**Day 7, Wednesday 18 November 2026 · 16:35–17:45 IST (70 minutes)**
+**Day 7, Wednesday 18 November 2026 · 17:05–17:35 IST (30 minutes)**
 *Stress testing and containerisation: Dockerizing the entire twin workflow for deployment in production environments.*
 
 In Lab 7A the twin ran in **development mode**: two terminals, a dev server, hot reload. That is how you build it, not how you run it for a city. In this lab you package the whole twin into **containers**, start it with **one command**, then **break it** and **load it** to see how it behaves.
@@ -11,7 +11,7 @@ Continue in the Codespace from Lab 7A. Everything you need is in `docker-compose
 
 ## 0 · Clean start (2 min)
 
-Stop both terminals from Lab 7A (**Ctrl+C** in each). Put any changes you made aside and get the original:
+Stop both terminals from Lab 7A (**Ctrl+C** in each). In **terminal 1** (the repository folder), put any changes aside and go back to the main version (Lab 7A ended on an extra branch):
 
 ```bash
 git stash
@@ -20,7 +20,9 @@ git checkout main
 
 ---
 
-## 1 · One command for the whole twin (15 min)
+## 1 · One command for the whole twin (8 min)
+
+In terminal 1:
 
 ```bash
 docker compose up --build
@@ -37,7 +39,7 @@ The first build downloads the base images (Python, Node.js, nginx) and takes **a
 
 When the log goes quiet, open port **8080** (pop-up or **Ports** tab). It is the same twin as in Lab 7A, now served from containers.
 
-In a **second terminal**:
+In **terminal 2**:
 
 ```bash
 docker compose ps                  # both services, and the API's health
@@ -48,11 +50,10 @@ docker images | grep flood-twin    # the two images and their size
 
 1. `app/Dockerfile` has **two stages**. What is in the first one, what ends up in the second, and why is the final image (about 140 MB) so much smaller than the build environment?
 2. The `api` service has **no `ports:`**. Who can still reach it, and why is that a good idea?
-3. The data is **inside** the API image. Good for reproducibility. What happens when the data changes every day?
 
 ---
 
-## 2 · Break it on purpose (10 min)
+## 2 · Break it on purpose (6 min)
 
 A twin is only useful if it tells the truth when something fails.
 
@@ -82,11 +83,11 @@ Run `docker compose ps` a few times. The API comes back by itself, *healthy* aft
 
 ---
 
-## 3 · Stress test: how many people can it take? (25 min)
+## 3 · Stress test: how many people can it take? (12 min)
 
 During a flood, everyone opens the map at once. **Locust** simulates that: each simulated user behaves like the real app, opening the page, asking for `/api/live` every 10 seconds, and now and then opening a sensor's **Month** chart (`loadtest/locustfile.py`).
 
-In the second terminal, start Locust on its own, in the background (the twin keeps running):
+In terminal 2, start Locust on its own, in the background (the twin keeps running):
 
 ```bash
 docker compose --profile loadtest up -d loadtest
@@ -94,11 +95,9 @@ docker compose --profile loadtest up -d loadtest
 
 Open port **8089** (Locust's page).
 
-**Run 1, normal load:** 100 users, spawn rate 20 → **Start**. After a minute, read the **Statistics** tab: requests per second, failures, and the response times (*Median*, *95%ile*). Then **Stop**.
+**Run 1, a crowd:** 1,000 users, spawn rate 100 → **Start**. After a minute, read the **Statistics** tab: requests per second, failures, and the response times (*Median*, *95%ile*). Which request is the slowest, and why that one? (Hint: what does `/history/…/hourly` do in `api/main.py`?) Then **Stop**.
 
-**Run 2, a crowd:** 1,000 users, spawn rate 100. Which request is the slowest? Why that one? (Hint: look at what `/history/…/hourly` does in `api/main.py`.)
-
-**Run 3, a small server:** give the API only a quarter of a CPU. In `docker-compose.yml`, find the API's `image:` line and add `cpus: 0.25` right below it, with the same indentation:
+**Run 2, a small server:** give the API only a quarter of a CPU. In `docker-compose.yml`, find the API's `image:` line and add `cpus: 0.25` right below it, with the same indentation:
 
 ```yaml
     image: flood-twin-api:1.0
@@ -111,7 +110,7 @@ Open port **8089** (Locust's page).
 docker compose up -d api
 ```
 
-Repeat run 2 and compare. For reference, what we measured in a 2-core Codespace (1,000 users, 30 seconds):
+Repeat run 1 and compare. For reference, what we measured in a 2-core Codespace (1,000 users, 30 seconds):
 
 | API | Requests served | Failures | Average | Slowest *Month* chart |
 |---|---|---|---|---|
@@ -123,14 +122,14 @@ Your numbers will differ a little: Locust and the twin share the same small mach
 **Questions:**
 
 1. Nothing *failed*, but would a resident wait 8 seconds for a chart during a flood? Where is your limit?
-2. Name three ways to make run 3 fast again. (Think: do the work once instead of on every request; more copies of the API; a bigger machine; send static files from somewhere else.) Which is cheapest?
+2. Name three ways to make run 2 fast again. (Think: do the work once instead of on every request; more copies of the API; a bigger machine; send static files from somewhere else.) Which is cheapest?
 3. Remove the `cpus:` line again and run `docker compose up -d api`. Stop Locust with `docker compose stop loadtest`.
 
 ---
 
-## 4 · From one machine to many (10 min, discussion)
+## 4 · From one machine to many (in the wrap-up, all together)
 
-Your twin now runs anywhere Docker runs, from one file. Discuss in your group:
+Your twin now runs anywhere Docker runs, from one file. We discuss these together in the wrap-up at 17:35; think about them while your load test runs:
 
 - **Reproducible and reusable:** a colleague in Dresden wants to run exactly your version. What do you send them? (Hint: an image **registry**, and a version tag instead of `1.0` forever.)
 - **One machine is enough until…** The Resilient Hydro Twin runs as Docker Compose on **one** virtual machine. When would that stop being enough: more users, more cities, no downtime allowed?
@@ -150,6 +149,7 @@ This stops and removes the containers and their network. The images stay, so the
 
 ## Done early?
 
+- **Data in the image:** the 30 days of readings are *inside* the API image. Good for reproducibility. What happens when the data changes every day? Where else could it live?
 - **Replay another event:** `REPLAY_START=2026-11-06T00:00 docker compose up -d`. Follow `REPLAY_START` from the command line through `docker-compose.yml` into `api/main.py`.
 - **Watch the cache:** change one line in `api/main.py` and run `docker compose up --build`. Which build steps say `CACHED`, and why does the order of the lines in `api/Dockerfile` matter?
 - **Another engine in Docker:** `git checkout extra-deck` (or `extra-cesium`), then `docker compose up --build` and open the new page. What did the extra have to change in the Docker files? (`git diff step-9 extra-cesium -- app/Dockerfile`)
