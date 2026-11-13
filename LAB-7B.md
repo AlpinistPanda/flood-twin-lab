@@ -26,7 +26,7 @@ git checkout main
 docker compose up --build
 ```
 
-The first build downloads the base images (Python, Node.js, nginx) and takes **a few minutes** in a Codespace. Read the next part while it runs.
+The first build downloads the base images (Python, Node.js, nginx) and takes **about a minute** in a Codespace. Read the next part while it runs.
 
 **What is being built** (open the files in the editor):
 
@@ -46,7 +46,7 @@ docker images | grep flood-twin    # the two images and their size
 
 **Questions** (look at the files):
 
-1. `app/Dockerfile` has **two stages**. What is in the first one, what ends up in the second, and why is the final image (about 124 MB) so much smaller than the build environment?
+1. `app/Dockerfile` has **two stages**. What is in the first one, what ends up in the second, and why is the final image (about 140 MB) so much smaller than the build environment?
 2. The `api` service has **no `ports:`**. Who can still reach it, and why is that a good idea?
 3. The data is **inside** the API image. Good for reproducibility. What happens when the data changes every day?
 
@@ -111,18 +111,18 @@ Open port **8089** (Locust's page).
 docker compose up -d api
 ```
 
-Repeat run 2 and compare. For reference, on a laptop:
+Repeat run 2 and compare. For reference, what we measured in a 2-core Codespace (1,000 users, 30 seconds):
 
-| API | Requests in 30 s | Failures | Average | Slowest *Month* chart |
+| API | Requests served | Failures | Average | Slowest *Month* chart |
 |---|---|---|---|---|
-| No limit | 5,000 | 0 | 50 ms | 0.1 s |
-| ¼ CPU | 5,000 | 0 | 460 ms | 2.1 s |
+| No limit | 5,000 | 0 | 0.09 s | 0.3 s |
+| ¼ CPU | 3,830 | 0 | 3.0 s | 7.9 s |
 
-Your numbers in a Codespace will be different: Locust and the twin share the same small machine. What matters is **which** request suffers first, and **why**.
+Your numbers will differ a little: Locust and the twin share the same small machine. What matters is **which** request suffers first, and **why**.
 
 **Questions:**
 
-1. Nothing *failed*, but would a resident wait 2 seconds for a chart during a flood? Where is your limit?
+1. Nothing *failed*, but would a resident wait 8 seconds for a chart during a flood? Where is your limit?
 2. Name three ways to make run 3 fast again. (Think: do the work once instead of on every request; more copies of the API; a bigger machine; send static files from somewhere else.) Which is cheapest?
 3. Remove the `cpus:` line again and run `docker compose up -d api`. Stop Locust with `docker compose stop loadtest`.
 

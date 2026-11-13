@@ -73,8 +73,8 @@ Open the file in the editor. Save a change, and the browser picks it up by itsel
 **Do:** in terminal 1, stop the API with **Ctrl+C**. Watch the app for 30 seconds:
 
 - the dot turns orange (*Delayed*), then red (*Feed lost*);
-- the map turns grey, and the banner says the levels may be out of date;
-- with no sensors at *Warning*, it says **"Flood warnings unknown"**, not "No flood warnings".
+- the map turns grey, and a dark banner says the levels may be out of date;
+- the red alert banner now starts with **"Last known:"**. If no sensor was at *Warning*, it says **"Flood warnings unknown"**, never "No flood warnings".
 
 Start the API again (press ↑ and Enter in terminal 1). Within 10 seconds the app is *Live* again.
 
