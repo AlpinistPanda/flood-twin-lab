@@ -301,4 +301,69 @@ Step 3 already has *No recent data* for a single sensor that stopped reporting. 
 
 ## Step 5 · Pages, one shared feed, switchable layers → `step-5`
 
+**Goal:** turn the demo into an app. The map gets its own page, the sensor table gets a page of its own, and the sensors become one **information layer** among others to come, switched on and off in a layer panel.
+
+### The new shape
+
+```
+                      +layout.svelte   header, navigation, feed status, banners
+                      │  starts the feed once ──▶ feed.svelte.js  (polls /api/live every 10 s)
+                      │
+          ┌───────────┴──────────────┐
+      /maplibre                   /sensors
+      MapLibreMap                 the table
+      inside MapPage: map + LayerPanel ──▶ layers.svelte.js
+```
+
+| File | What it is |
+|---|---|
+| `app/src/lib/feed.svelte.js` | **New.** The sensor feed: data, levels, polling, feed status. Moved out of the page |
+| `app/src/lib/layers.svelte.js` | **New.** The list of information layers and whether each is on |
+| `app/src/lib/LayerPanel.svelte` | **New.** The *Layers* box with a checkbox per layer, and the legend |
+| `app/src/lib/MapPage.svelte` | **New.** The frame of every map page: the map, the layer panel, grey when the feed is lost |
+| `app/src/routes/+layout.svelte` | Header with navigation and feed status, the banners, and `feed.start()` |
+| `app/src/routes/maplibre/+page.svelte` | **New.** The map page: a few lines |
+| `app/src/routes/sensors/+page.svelte` | **New.** The sensor table |
+| `app/src/routes/+page.js` | The home address now sends you to `/maplibre` |
+| `app/src/routes/+layout.js` | `ssr = false` for the whole app (was one page) |
+| `app/src/lib/MapLibreMap.svelte` | Takes a `layers` prop and hides the sensors when they are switched off. Now fills its page |
+
+### Run it
+
+Same two terminals. Open port **5173**: you land on **MapLibre GL**. Switch pages with the navigation bar. Untick **Water-level sensors** in the *Layers* box, open **Sensor data**, and come back: the sensors are still off. The choice lives in `layers.svelte.js`, not in the page.
+
+### Three ideas to take away
+
+**1 · State that outlives a page belongs in a store.** In step 4 the page did the polling. With several pages, that would mean four pollers, or a feed that restarts (and forgets its hysteresis history, step 3) every time you change page. `feed.svelte.js` holds **one** feed. The layout starts it, and because the layout stays mounted while you move between pages, it keeps running. Every page imports the same `feed` object. Check: open **Sensor data**, then a map, then back: the *Changes* column has kept counting.
+
+**2 · `.svelte.js` files.** `$state` and `$derived` also work outside components, in files whose name ends in `.svelte.js`. In `feed.svelte.js` they sit on a class: `feed.status` and `feed.geojson` recompute by themselves when the data changes, on every page that uses them.
+
+**3 · A layer is data + "how to draw it" + "is it on?".** `layers.svelte.js` only says *which* layers exist and whether they are on. The map component decides how to draw and hide it: in MapLibre, `setLayoutProperty(id, 'visibility', 'none')` on each style layer. Another map engine would do the same job in its own way (see the extras at the end).
+
+### Adding a layer
+
+The next information layers for a flood twin could be rain gauges, drains, flood-prone areas or a flood-depth map. For each one:
+
+1. Add it to `layers.svelte.js`: `drains: { label: 'Storm-water drains', visible: false }`.
+2. Get its data (an API endpoint, or a GeoJSON file in `app/static/`).
+3. In the map component: draw it, and follow `layers.drains.visible`.
+
+The layer panel picks it up by itself.
+
+### Try
+
+- Add a layer entry with no data behind it yet. What does the panel show? What do the maps do?
+- Open the browser's developer tools on the **Network** tab and move between pages. How many `/api/live` requests do you see every 10 s?
+- Reload the browser on `/sensors`. Which settings survive a reload, and which don't? Why?
+
+### Questions
+
+- The map page is only a few lines long. What would it take to add a second map engine (for example CesiumJS, or OpenLayers)? The extras at the end do exactly that.
+- The layer choices are lost when you reload. Should they be kept: in the URL, in the browser, or on the server? What does each choice mean for sharing a link with a colleague?
+- The feed is still computed in each browser (levels, hysteresis). Now that the app has pages and layers, is it time to move that to the server? What would change in Lab 7B?
+
+---
+
+## Step 6 · Sensor details: a day and a month in the popup → `step-6`
+
 *Coming next.*

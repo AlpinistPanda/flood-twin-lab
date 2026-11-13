@@ -6,7 +6,8 @@
 
 	// Step 2: the sensors on a 2D web map with MapLibre GL.
 	// The page gives us the data as GeoJSON; this component only draws it.
-	let { geojson } = $props();
+	// Step 5: `layers` says which information layers are switched on.
+	let { geojson, layers } = $props();
 
 	let container; // the <div> the map draws into
 	let map = $state(null); // set once the map and its style have loaded
@@ -89,6 +90,12 @@
 	$effect(() => {
 		map?.getSource('sensors').setData(geojson);
 	});
+
+	// Step 5: show or hide the sensor layers when the checkbox in the layer panel changes.
+	$effect(() => {
+		const visibility = layers.sensors.visible ? 'visible' : 'none';
+		for (const id of ['sensor-dots', 'sensor-labels']) map?.setLayoutProperty(id, 'visibility', visibility);
+	});
 </script>
 
 <div class="map" bind:this={container}></div>
@@ -96,7 +103,6 @@
 <style>
 	.map {
 		width: 100%;
-		height: 60vh;
-		border-radius: 6px;
+		height: 100%;
 	}
 </style>
