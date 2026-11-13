@@ -29,7 +29,12 @@ git checkout step-2      # jump to the end of step 2
 | `extra-cesium` | A CesiumJS page: the sensors as columns on a 3D globe |
 | `extra-deck` | A deck.gl page: 3D columns as GPU layers on a tilted MapLibre map |
 
-The full walkthrough is in **[STEPS.md](STEPS.md)**.
+**In the lab:** follow the brief for your session:
+
+- **[LAB-7A.md](LAB-7A.md)**, Session 1 (40 min): live sensors, alerts and a flood model on a web map
+- **[LAB-7B.md](LAB-7B.md)**, Session 2 (70 min): the whole twin in containers, then stress it
+
+The full step-by-step walkthrough is in **[STEPS.md](STEPS.md)**.
 
 ## Start
 
