@@ -16,5 +16,16 @@ export default defineConfig({
 			// See https://svelte.dev/docs/kit/adapters for more information about adapters.
 			adapter: adapter()
 		})
-	]
+	],
+
+	// Step 1: the browser asks this dev server for /api/…, and the dev server passes the
+	// request on to the sensor API. The browser only ever talks to one address.
+	server: {
+		proxy: {
+			'/api': {
+				target: process.env.API_URL ?? 'http://localhost:8000',
+				rewrite: (path) => path.replace(/^\/api/, '')
+			}
+		}
+	}
 });

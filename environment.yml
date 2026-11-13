@@ -1,0 +1,15 @@
+# Conda environment for running the lab on your own laptop (route B).
+# In GitHub Codespaces you don't need this: the dev container already has everything.
+#
+#   conda env create -f environment.yml
+#   conda activate flood-twin
+#
+# It provides Python for the sensor API and Node.js for the web app.
+name: flood-twin
+channels:
+  - conda-forge
+dependencies:
+  - python=3.15
+  - nodejs=26
+  - fastapi=0.162.5
+  - uvicorn=0.54.0

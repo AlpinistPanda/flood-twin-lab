@@ -7,10 +7,11 @@
     "ghcr.io/devcontainers/features/node:1": { "version": "26" },
     "ghcr.io/devcontainers/features/docker-in-docker:2": { "moby": false }
   },
-  "postCreateCommand": "npm install -g npm@12 && cd app && npm install",
-  "forwardPorts": [5173],
+  "postCreateCommand": "pip install -r api/requirements.txt && npm install -g npm@12 && cd app && npm install",
+  "forwardPorts": [5173, 8000],
   "portsAttributes": {
-    "5173": { "label": "Flood viewer (dev server)", "onAutoForward": "openBrowser" }
+    "5173": { "label": "Flood viewer (dev server)", "onAutoForward": "openBrowser" },
+    "8000": { "label": "Sensor API", "onAutoForward": "silent" }
   },
   "customizations": {
     "vscode": {

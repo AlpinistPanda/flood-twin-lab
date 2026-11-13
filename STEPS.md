@@ -66,4 +66,65 @@ Open port **5173** (Codespaces offers it in a pop-up, or use the **Ports** tab).
 
 ## Step 1 · Fetch the live sensor feed → `step-1`
 
+**Goal:** the app asks a sensor service for the latest water levels and shows them in a table.
+
+### The pieces
+
+```
+ data/          ──▶  api/  (Python, port 8000)  ──▶  app/  (SvelteKit, port 5173)  ──▶  your browser
+ 30 days of          replays the data as if           asks the API, shows
+ real readings       it were live                     a table
+```
+
+- **`data/`**: 30 days of real readings from 33 water-level sensors in Tambaram, unfiltered. Read `data/README.md`.
+- **`api/main.py`**: a small web service (FastAPI). It pretends the recorded data is live: it starts at the 4 November rain event and plays **one hour of data per real minute**.
+- **`app/`**: the web app. The browser asks the app for `/api/…`, and the app's dev server forwards it to the API (`app/vite.config.js`). The browser only ever talks to one address.
+
+### Run it (two terminals)
+
+Terminal 1, the sensor API:
+
+```bash
+python api/main.py
+```
+
+Terminal 2, the web app (click **+** in the terminal panel for a second terminal):
+
+```bash
+cd app
+npm run dev
+```
+
+Open port **5173**. You see a table with one row per sensor. Press **Refresh** a few times: the sensor time moves on.
+
+### Explore the API
+
+Open port **8000** and add `/docs` to the address. FastAPI shows every endpoint, and you can try each one with **Try it out**:
+
+| Endpoint | Returns |
+|---|---|
+| `/sites` | Where each sensor is, and its type |
+| `/live` | The latest reading of every sensor *now* |
+| `/history/TBM-16?from=…&to=…` | All readings of one sensor in a time window |
+| `/health` | Is the service up, and where is the replay |
+
+### Look at the code
+
+| File | What to look for |
+|---|---|
+| `app/src/routes/+page.svelte` | `load()` fetches `/api/sites` and `/api/live`; `$state` makes the table update when the data arrives |
+| `app/vite.config.js` | The `proxy` block that forwards `/api` to port 8000 |
+| `api/main.py` | `data_now()`: how a recording becomes "live" |
+
+### Questions
+
+- Look at the **Depth** and **Age** columns. Which sensors would you trust right now? Which ones are clearly wrong, and how can you tell?
+- TBM-01 shows −7.49 m measured days ago. Should the app show that number at all?
+- Times in the API are in UTC seconds; the table shows IST. Why store UTC and convert only for display?
+- Stop the API (Ctrl+C in terminal 1) and press **Refresh**. What does the app say? Start it again.
+
+---
+
+## Step 2 · MapLibre GL: sensors on a map → `step-2`
+
 *Coming next.*
