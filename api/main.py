@@ -117,6 +117,41 @@ def history(
     }
 
 
+@app.get("/history/{site_id}/hourly")
+def history_hourly(
+    site_id: str,
+    start: int | None = Query(None, alias="from", description="Unix seconds, default: 30 days before 'to'"),
+    end: int | None = Query(None, alias="to", description="Unix seconds, default: the current replay time"),
+):
+    """One summary per hour (min, mean, max, number of readings) between `from` and `to` (at most 31 days).
+
+    For long periods: a month of one-minute readings is ~43,000 points, too many for a chart.
+    Hours without readings are left out, so gaps stay visible.
+    """
+    if site_id not in SITES:
+        raise HTTPException(404, f"Unknown site {site_id}")
+    end = end if end is not None else data_now()
+    start = start if start is not None else end - 30 * 86400
+    if end < start:
+        raise HTTPException(400, "'to' must be after 'from'")
+    if end - start > 31 * 86400:
+        raise HTTPException(400, "Ask for at most 31 days at a time")
+    times, depths = TIMES[site_id], DEPTHS[site_id]
+    i, j = bisect.bisect_left(times, start), bisect.bisect_right(times, end)
+    hours: dict[int, list[float]] = {}
+    for k in range(i, j):
+        hours.setdefault(times[k] - times[k] % 3600, []).append(depths[k])
+    return {
+        "site": site_id,
+        "from": start,
+        "to": end,
+        "hours": [
+            {"time": h, "min": min(v), "mean": round(sum(v) / len(v), 3), "max": max(v), "n": len(v)}
+            for h, v in sorted(hours.items())
+        ],
+    }
+
+
 @app.get("/health")
 def health():
     """Is the service up, and where is the replay?"""

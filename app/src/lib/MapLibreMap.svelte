@@ -1,8 +1,8 @@
 <script>
-	import { onMount } from 'svelte';
+	import { onMount, mount, unmount } from 'svelte';
 	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
-	import { showTime, showAge, LEVELS } from '#lib/sensors.js';
+	import SensorDetail from '#lib/SensorDetail.svelte';
 
 	// Step 2: the sensors on a 2D web map with MapLibre GL.
 	// The page gives us the data as GeoJSON; this component only draws it.
@@ -65,17 +65,18 @@
 				paint: { 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 }
 			});
 
-			// Click a sensor: show its latest reading in a popup.
+			// Click a sensor: open a popup with the SensorDetail component in it (step 6).
+			// MapLibre only knows HTML elements, so we make an empty <div>, let Svelte mount the
+			// component into it, and unmount it again when the popup closes.
 			m.on('click', 'sensor-dots', (e) => {
-				const p = e.features[0].properties;
-				new maplibregl.Popup()
+				const id = e.features[0].properties.id;
+				const target = document.createElement('div');
+				const detail = mount(SensorDetail, { target, props: { id } });
+				const popup = new maplibregl.Popup({ maxWidth: 'none' })
 					.setLngLat(e.features[0].geometry.coordinates)
-					.setHTML(
-						`<strong>${p.id}</strong> · ${p.type} · <strong>${LEVELS[p.level].label}</strong><br>
-						 Depth: ${p.depth_m ?? '–'} m<br>
-						 Measured: ${showTime(p.time)} IST (${showAge(p.age_s)} ago)`
-					)
-					.addTo(m);
+					.setDOMContent(target);
+				popup.on('close', () => unmount(detail)); // (in MapLibre 6, .on() can't be chained)
+				popup.addTo(m);
 			});
 			m.on('mouseenter', 'sensor-dots', () => (m.getCanvas().style.cursor = 'pointer'));
 			m.on('mouseleave', 'sensor-dots', () => (m.getCanvas().style.cursor = ''));

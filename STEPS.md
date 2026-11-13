@@ -366,4 +366,51 @@ The layer panel picks it up by itself.
 
 ## Step 6 · Sensor details: a day and a month in the popup → `step-6`
 
+**Goal:** click a sensor on the MapLibre map and get its story, not only its latest number: **Now**, the last **Day** and the last **Month**, as tabs in the popup.
+
+### What changed
+
+| File | What changed |
+|---|---|
+| `api/main.py` | **New endpoint** `/history/{site}/hourly`: one summary per hour (min, mean, max, count), up to 31 days |
+| `app/src/lib/SensorChart.svelte` | **New.** A small time-series chart in plain SVG, with the step 3 thresholds as dashed lines |
+| `app/src/lib/SensorDetail.svelte` | **New.** The popup content: three tabs, loads the history when a tab is first opened |
+| `app/src/lib/MapLibreMap.svelte` | The popup now holds a Svelte component instead of a fixed piece of HTML |
+
+Restart the API after pulling this step: it has a new endpoint.
+
+### Run it
+
+Same two terminals. On the **MapLibre GL** page, click a sensor. Switch between **Now**, **Day** and **Month**. Leave the popup open on **Now**: the value keeps updating with the feed.
+
+Try TBM-15 (a real event), TBM-22 (high all month: flood or offset?), TBM-14 (always negative: the chart says so).
+
+### Three ideas to take away
+
+**1 · Don't send what you can't show.** A month of one-minute readings is about 43,000 points per sensor. A 300-pixel-wide chart can't show them, and the phone of a field engineer shouldn't download them. So the **server** summarises: one row per hour with the lowest, mean and highest reading. The Day view uses the raw readings (`/history`, ~1,400 points); the Month view uses the summary (`/history/…/hourly`, ~720 rows). Choosing the right resolution per view is a design decision, not a detail.
+
+**2 · Summaries can hide things.** The hourly *mean* of a sensor that jumps between 0.5 m and −0.3 m looks calm. That's why the Month chart also draws each hour's **range** as a bar. Which number would you put in a report: the mean or the max?
+
+**3 · A map popup can hold a whole component.** MapLibre only knows HTML elements. `mount(SensorDetail, { target, props: { id } })` puts a live Svelte component into an empty `<div>`, and `unmount()` removes it when the popup closes. Because the component reads the shared `feed`, the **Now** tab stays live.
+
+### Load on demand, again
+
+The history is fetched only when you open the **Day** or **Month** tab, and only once per popup. Open the **Network** tab in the developer tools and watch when the requests go out. Don't download what nobody looks at: the flood layers in the next step follow the same rule.
+
+### Try
+
+- Add a **Week** tab. Which endpoint would you use, raw or hourly?
+- In `SensorChart.svelte`, change `gap_s`. What happens to the gaps in TBM-03's line?
+- Draw the hourly **max** instead of the mean as the line.
+
+### Questions
+
+- The chart cuts off readings below −0.5 m and says so underneath. Is it better to cut them off, show them, or hide them?
+- The summaries are computed on every request. With 10,000 users clicking sensors during a cyclone, what would you change? (Lab 7B.)
+- The Day view starts 24 hours before the replay's "now". After an API restart (step 4), what happens to a popup that is already open?
+
+---
+
+## Step 7 · A flood scenario: one raster, one vector → `step-7`
+
 *Coming next.*
