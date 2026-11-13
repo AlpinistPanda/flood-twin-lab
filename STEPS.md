@@ -185,4 +185,69 @@ SvelteKit normally renders a page once on the server, then again in the browser.
 
 ## Step 3 · Threshold colours, alert banner, hysteresis → `step-3`
 
+**Goal:** turn numbers into decisions. Each sensor gets a level (dry, watch, warning, danger), the map and table are coloured by it, and a banner lists the sensors that need attention. Readings we can't trust are shown as such, not as water.
+
+### What changed
+
+| File | What changed |
+|---|---|
+| `app/src/lib/sensors.js` | **The rules.** `THRESHOLDS`, `HYSTERESIS_M`, `STALE_AFTER_S`, `SUSPECT_BELOW_M`, the `LEVELS` colours, and the functions `waterLevel()` and `classify()` |
+| `app/src/routes/+page.svelte` | Keeps each sensor's level between refreshes, the alert banner, a legend, and **Level** and **Changes** columns |
+| `app/src/lib/MapLibreMap.svelte` | Dots take their colour from the data; the most severe are drawn on top |
+
+### Run it
+
+Same two terminals. To land in the middle of the 4 November event straight away, start the API like this:
+
+```bash
+REPLAY_START=2026-11-04T15:00 python api/main.py
+```
+
+Press **Refresh** every few seconds (one real minute is one hour of data) and watch the banner, the colours and the **Changes** column.
+
+### The rules, in order
+
+`classify()` asks two questions, in this order:
+
+1. **Can we trust this reading?** No reading for 30 minutes → *No recent data* (grey). Depth below −0.10 m, or more than the sensor's mounting height → *Suspect* (purple).
+2. **Only then: how deep is it?** 0.15 m → *Watch*, 0.30 m → *Warning*, 0.50 m → *Danger*.
+
+The order matters. Without step 1, TBM-01's −7.49 m from a week ago would simply count as "dry", and the map would look reassuring for a place we know nothing about.
+
+The thresholds are teaching values (kerb height, cars stalling, unsafe to walk). In a real twin they come from the city's emergency plan, and may differ per site: 0.30 m in an underpass is not the same as 0.30 m on a main road.
+
+### Hysteresis
+
+A level that hovers around a threshold makes a nervous map. Try this in the `app/` folder:
+
+```bash
+node -e "
+import('./src/lib/sensors.js').then(({ waterLevel }) => {
+  let level = 'dry';
+  for (const d of [0.28, 0.31, 0.29, 0.31, 0.27, 0.29, 0.24]) {
+    level = waterLevel(d, level);
+    console.log(d, level, '   without hysteresis:', waterLevel(d, 'dry'));
+  }
+});"
+```
+
+Without hysteresis the sensor jumps between *watch* and *warning* four times in seven readings; every jump could be an SMS to someone. With it, a sensor **enters** warning at 0.30 m but only **leaves** it below 0.25 m (`HYSTERESIS_M = 0.05`). To do that, `waterLevel()` needs to know the previous level. That is why the page keeps `levels` between refreshes.
+
+### Try
+
+- Set `HYSTERESIS_M = 0` and refresh during the event. Watch the **Changes** column.
+- Set `STALE_AFTER_S` to 5 minutes. How many sensors go grey? Some sensors report every minute, others every 5 minutes.
+- Give underpasses a lower warning threshold than streets. Where would that rule live?
+
+### Questions
+
+- TBM-33 reads above 0.5 m almost the whole month (typically about 0.75 m), also on days without rain, so it is nearly always *Danger*. Danger, or a sensor that needs recalibrating? Can the app tell the difference? Can you?
+- TBM-14 is always negative, between −1 and −9 m. It is now *Suspect*. Who should be told, and how?
+- The banner says how many sensors have no trustworthy data. Why put that in the banner, and not only in the table?
+- Our levels are computed in the **browser**. Two people with the page open since different times can see different levels for the same sensor (hysteresis depends on history). Where should this logic live in a real system?
+
+---
+
+## Step 4 · Live updates and a "feed lost" indicator → `step-4`
+
 *Coming next.*

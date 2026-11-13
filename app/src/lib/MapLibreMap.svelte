@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
-	import { showTime, showAge } from '#lib/sensors.js';
+	import { showTime, showAge, LEVELS } from '#lib/sensors.js';
 
 	// Step 2: the sensors on a 2D web map with MapLibre GL.
 	// The page gives us the data as GeoJSON; this component only draws it.
@@ -35,9 +35,14 @@
 				id: 'sensor-dots',
 				type: 'circle',
 				source: 'sensors',
+				layout: {
+					// Step 3: draw the most severe sensors on top.
+					'circle-sort-key': ['match', ['get', 'level'], 'danger', 3, 'warning', 2, 'watch', 1, 0]
+				},
 				paint: {
 					'circle-radius': 7,
-					'circle-color': '#1f6fb2',
+					// Step 3: each feature carries its own colour (set in toGeoJSON).
+					'circle-color': ['get', 'colour'],
 					'circle-stroke-width': 1.5,
 					'circle-stroke-color': '#ffffff'
 				}
@@ -65,7 +70,7 @@
 				new maplibregl.Popup()
 					.setLngLat(e.features[0].geometry.coordinates)
 					.setHTML(
-						`<strong>${p.id}</strong> · ${p.type}<br>
+						`<strong>${p.id}</strong> · ${p.type} · <strong>${LEVELS[p.level].label}</strong><br>
 						 Depth: ${p.depth_m ?? '–'} m<br>
 						 Measured: ${showTime(p.time)} IST (${showAge(p.age_s)} ago)`
 					)
