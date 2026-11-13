@@ -150,7 +150,7 @@ Same two terminals as step 1. Open port **5173**: the map is above the table. Zo
 
 ### Three ideas to take away
 
-**1 · GeoJSON is the common language.** The API gives us its own JSON. We turn it into GeoJSON once (`toGeoJSON`), and from then on any web map can draw it: MapLibre here, and CesiumJS or deck.gl in the optional extras at the end. Note the order: GeoJSON is **[lon, lat]**, not [lat, lon]. Swap them and Tambaram ends up in the Southern Ocean.
+**1 · GeoJSON is the common language.** The API gives us its own JSON. We turn it into GeoJSON once (`toGeoJSON`), and from then on any web map can draw it: MapLibre here, and CesiumJS or deck.gl in the optional extras at the end. Note the order: GeoJSON is **[lon, lat]**, not [lat, lon]. Swap them and Tambaram ends up at 80° north, in the Arctic Ocean near Svalbard.
 
 **2 · Source + layer.** MapLibre separates *what* from *how*:
 
@@ -656,7 +656,7 @@ On a laptop, 200 users made 1,000 requests in 30 seconds without a single failur
 
 ### Try
 
-- Limit the API to half a CPU: add `cpus: 0.5` under `api:` in `docker-compose.yml`, run `docker compose up -d`, and run the load test again.
+- Limit the API to half a CPU: in `docker-compose.yml`, add `cpus: 0.5` on the line below the API's `image:` line (not under `depends_on:`, where `api:` appears a second time), run `docker compose up -d api`, and run the load test again.
 - Start the twin at the 6 November event: `REPLAY_START=2026-11-06T00:00 docker compose up`. Follow that setting from the command line to the code.
 - Change a line in `api/main.py` and rebuild. Which build steps say `CACHED`, and why?
 

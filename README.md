@@ -34,7 +34,9 @@ git checkout step-2      # jump to the end of step 2
 - **[LAB-7A.md](LAB-7A.md)** (75 min: 14:45–15:30 and 16:00–16:30 IST): live sensors, alerts and a flood model on a web map, then the same twin in 3D
 - **[LAB-7B.md](LAB-7B.md)** (30 min: 17:05–17:35 IST): the whole twin in containers, then stress it
 
-The full step-by-step walkthrough is in **[STEPS.md](STEPS.md)**.
+The full step-by-step walkthrough is in **[STEPS.md](STEPS.md)**: what each step does, and why.
+
+**Build it yourself:** the **[build guide](guide/README.md)** takes you from an empty folder to the whole twin in containers, in the same ten steps: what to write, in which file, how to check it, and how to catch up from the step's tag if you get stuck. You build the web app; the sensor API is given ([how to connect to it](guide/api.md)). Start from the branch `start`.
 
 ## Start
 
@@ -75,7 +77,8 @@ The `flood-twin` environment contains Python 3.15, Node.js 26 and the API's pack
 | `data/` | 30 days of real water-level readings from 33 sensors in Tambaram, Chennai, and the maximum depth of a 100-year flood scenario (see `data/README.md`) |
 | `api/` | The sensor API: replays the data as if it were live (Python, FastAPI) |
 | `app/` | The SvelteKit web app |
-| `STEPS.md` | Step-by-step walkthrough |
+| `STEPS.md` | Step-by-step walkthrough: what each step does, and why |
+| `guide/` | Build guide: build the twin yourself, step by step |
 
 ## Credits & licence
 

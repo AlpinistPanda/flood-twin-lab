@@ -6,7 +6,7 @@
 
 You get a working flood twin of **Tambaram** (Chennai): 33 real water-level sensors, replayed as a live feed, on a MapLibre web map, with alerts and a 100-year flood scenario. You won't build it from scratch. In **part 1** you **run** it, **change its rules**, **break it**, and put a **flood model next to the measurements**. In **part 2** you see the same twin in **3D**, and look at **how it was built**.
 
-Want to see how it was built, step by step? Everything is in [STEPS.md](STEPS.md), one git tag per step. That is for after the lab.
+Want to see how it was built, step by step? Everything is in [STEPS.md](STEPS.md), one git tag per step. Want to **build it yourself**, from an empty folder? Follow the [build guide](guide/README.md). Both are for after the lab.
 
 ---
 
@@ -167,6 +167,8 @@ git diff step-4 step-5 --stat -- src          # when the app got pages and the L
 **Do:** pick one step from the list in [STEPS.md](STEPS.md) that interests you (for example *step 3: the alert rules*, or *step 8: the flood over time*) and read its section. Find the file it talks about in the editor.
 
 **Discuss:** the deck.gl extra adds a whole map engine in 7 files and about 250 lines of code. What made that possible? (Hint: step 2's *GeoJSON is the common language*, and step 5's *one shared feed*.)
+
+After the school, you can build the whole twin yourself with the [build guide](guide/README.md): about ten hours, in the same steps, with the tags as a safety net.
 
 ---
 
