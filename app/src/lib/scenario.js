@@ -16,7 +16,7 @@
 //   depth_timeseries_100yr.json Which model step each band is, and the wet area per step.
 
 import * as maplibregl from 'maplibre-gl';
-import { cogProtocol, setColorFunction, locationValues } from '@geomatico/maplibre-cog-protocol';
+import { cogProtocol, setColorFunction, locationValues, getCogMetadata } from '@geomatico/maplibre-cog-protocol';
 import { waterLevel, LEVELS } from '#lib/sensors.js';
 
 export const FLOOD_URL = `${location.origin}/layers/max_depth_100yr.tif`;
@@ -125,6 +125,41 @@ export async function floodDepthAtStep(lngLat) {
 	return Number.isFinite(depth) && depth >= DEPTH_CLASSES[0][0] ? depth : null;
 }
 
+// ── Extras: the same files for other map engines ─────────────────────────────
+
+// OpenStreetMap hardly ever records how tall a building is here (0.2% of buildings have a
+// number of floors). So the 3D views give every building the same assumed height.
+export const BUILDING_HEIGHT_M = 6; // about two storeys
+
+// The 3D views show ALL 78,045 buildings, not only the exposed ones, so the city around them is not
+// empty (the 2D map gets that from its basemap). 22 MB of GeoJSON, about 3.3 MB as nginx sends it (compressed).
+export const BUILDINGS_ALL_URL = '/layers/buildings_all.geojson';
+export const NOT_EXPOSED_COLOUR = '#c8c8c8';
+
+// Grey below 0.15 m (or dry), otherwise the sensor levels' colour (step 3).
+export function buildingColour(depth) {
+	const level = waterLevel(depth ?? 0);
+	return level === 'dry' ? NOT_EXPOSED_COLOUR : LEVELS[level].colour;
+}
+
+// The colour functions and the time step, without a MapLibre map (for CesiumJS).
+export function useFloodStep(band) {
+	registerOnce();
+	shownBand = band;
+}
+
+// One map tile of a COG, coloured by the functions above: an image for tile z/x/y.
+// This is what MapLibre asks the plugin for; another engine can ask for the same tiles.
+export async function cogTile(url, z, x, y) {
+	registerOnce();
+	return (await cogProtocol({ type: 'image', url: `cog://${url}/${z}/${x}/${y}` })).data;
+}
+
+// The area a COG covers, as [west, south, east, north] in degrees.
+export async function cogBounds(url) {
+	return (await getCogMetadata(url)).bbox;
+}
+
 // The vector layer: building outlines, coloured with the SAME thresholds as the sensors (step 3).
 export function addBuildings(map, beforeId) {
 	map.addSource('buildings', { type: 'geojson', data: BUILDINGS_URL });
@@ -146,6 +181,12 @@ export function addBuildings(map, beforeId) {
 }
 
 export function buildingPopup(p) {
+	if (waterLevel(p.depth_m ?? 0) === 'dry') {
+		return `<strong>Building</strong> · OpenStreetMap ${p.osm_id}<br>
+		Type: ${p.use}<br>
+		Not exposed: ${p.depth_m == null ? 'dry' : `at most ${p.depth_m} m of water`}<br>
+		<small>100-year scenario.</small>`;
+	}
 	const level = waterLevel(p.depth_m);
 	return `<strong>Building</strong> · OpenStreetMap ${p.osm_id}<br>
 		Type: ${p.use}<br>

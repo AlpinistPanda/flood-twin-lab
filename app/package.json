@@ -8,6 +8,7 @@
 		"#lib/*": "./src/lib/*"
 	},
 	"scripts": {
+		"postinstall": "node scripts/copy-cesium.js",
 		"dev": "vite dev",
 		"build": "vite build",
 		"preview": "vite preview",
@@ -22,6 +23,7 @@
 	},
 	"dependencies": {
 		"@geomatico/maplibre-cog-protocol": "^0.10.0",
+		"cesium": "^1.147.0",
 		"maplibre-gl": "^6.18.0"
 	}
 }

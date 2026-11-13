@@ -13,6 +13,7 @@
 
 	const pages = [
 		{ href: '/maplibre', name: 'MapLibre GL', what: '2D map' },
+		{ href: '/cesium', name: 'CesiumJS', what: '3D globe' },
 		{ href: '/sensors', name: 'Sensor data', what: 'table' }
 	];
 </script>

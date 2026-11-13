@@ -22,3 +22,5 @@ Thumbs.db
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
+# Extra (Cesium): copied from node_modules by scripts/copy-cesium.js
+/static/cesium-assets

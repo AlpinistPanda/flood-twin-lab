@@ -18,7 +18,7 @@ export const GROUPS = { flood: 'Flood depth, 100-year flood' };
 
 export const layers = $state({
 	sensors: { label: 'Water-level sensors (live)', visible: true, legend: 'levels' },
-	buildings: { label: 'Buildings exposed, 100-year flood', visible: false, legend: 'exposure' },
+	buildings: { label: 'Buildings, 100-year flood', visible: false, legend: 'exposure' },
 	flood: { label: 'Max flood depth, 100-year flood', visible: false, legend: 'depth', group: 'flood', option: 'Maximum depth' },
 	floodTime: { label: 'Flood depth over time, 100-year flood', visible: false, legend: 'depth', group: 'flood', option: 'Over time', band: 0 }
 });

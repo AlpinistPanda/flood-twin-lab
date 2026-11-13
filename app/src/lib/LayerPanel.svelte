@@ -1,7 +1,7 @@
 <script>
 	import { layers, GROUPS } from '#lib/layers.svelte.js';
 	import { LEVELS } from '#lib/sensors.js';
-	import { DEPTH_CLASSES } from '#lib/scenario.js';
+	import { DEPTH_CLASSES, NOT_EXPOSED_COLOUR } from '#lib/scenario.js';
 
 	// Step 5: switch information layers on and off. Floats over the top-left of every map page.
 	// Step 7: `supported` lists the layers this page can draw; the others are greyed out.
@@ -68,6 +68,7 @@
 					<li><i class="sq" style:background={LEVELS.watch.colour}></i>0.15 – 0.30 m</li>
 					<li><i class="sq" style:background={LEVELS.warning.colour}></i>0.30 – 0.50 m</li>
 					<li><i class="sq" style:background={LEVELS.danger.colour}></i>0.50 m and more</li>
+					<li><i class="sq" style:background={NOT_EXPOSED_COLOUR}></i>Not exposed (3D pages)</li>
 				</ul>
 			{/if}
 			{/if}

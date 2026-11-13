@@ -684,3 +684,106 @@ cd app && npm install        # the extra engine's packages
 ```
 
 The Resilient Hydro Twin started on CesiumJS and moved to MapLibre when stakeholders said they didn't need 3D. Try one, and decide for yourself.
+
+---
+
+## Extra · CesiumJS: the same data on a 3D globe → `extra-cesium`
+
+**Goal:** show the whole twin on a 3D globe: the sensors as columns whose height is the water depth, every building as a 3D block (the exposed ones in colour), and the flood (maximum and over time) draped on the ground. Then ask honestly: does 3D help here?
+
+### What was done
+
+```bash
+cd app
+npm install cesium
+```
+
+| File | What changed |
+|---|---|
+| `app/src/lib/CesiumGlobe.svelte` | **New.** The globe: imagery, camera, a column per sensor, 3D buildings, the flood rasters, a click for the depth |
+| `app/src/lib/scenario.js` | `cogTile()`, `cogBounds()`, `useFloodStep()`: the COG plugin's tiles for another engine; `BUILDING_HEIGHT_M`, `buildingColour()` |
+| `app/static/layers/buildings_all.geojson` | **New.** All 78,045 OpenStreetMap buildings with their flood depth (22 MB; about 3.3 MB compressed, as nginx sends it). The 2D map doesn't need it: its basemap draws the buildings |
+| `app/src/lib/layers.svelte.js`, `LayerPanel.svelte` | The buildings layer is now *Buildings*, with a grey legend entry for the ones that are not exposed |
+| `app/src/routes/cesium/+page.svelte` | **New.** The CesiumJS page: the same `geojson`, the same *Layers* box and time bar as the MapLibre page |
+| `app/src/routes/+layout.svelte` | A **CesiumJS** link in the navigation |
+| `app/src/lib/sensors.js` | `columnHeight()`: how tall a column is for a given depth |
+| `app/scripts/copy-cesium.js` | **New.** Copies Cesium's workers, images and widget styles to `static/cesium-assets/` |
+| `app/package.json` | `"postinstall"` runs that script after every `npm install` |
+| `app/.gitignore`, `app/.dockerignore` | `static/cesium-assets/` is a copy, so it is not committed or sent to Docker |
+| `app/Dockerfile` | Copies `scripts/` before `npm ci`, so the copy also happens in the image |
+
+### Run it
+
+Same two terminals (or Docker). After `git checkout extra-cesium`, run `npm install` in `app/` first: that installs Cesium **and** copies its files. Then open the **CesiumJS** page and switch on the layers in the *Layers* box.
+
+- Drag to pan, scroll to zoom, **right-drag** (or Ctrl+drag) to tilt. Zoom in on a neighbourhood to see the buildings stand up.
+- Click a column or a building: Cesium's info box shows it. Click the ground with a flood layer on: the depth there.
+- Under *Flood depth*, choose **Over time** and press ▶ in the time bar: the flood plays on the globe.
+- The globe button at the top right switches between **3D**, **2D** and **Columbus view**.
+
+### Three ideas to take away
+
+**1 · Same data, different engine.** `CesiumGlobe` receives exactly the same `geojson` as `MapLibreMap`. Only the drawing code differs. This is why step 2 converted the API's data into GeoJSON once, in `sensors.js`.
+
+**2 · Two ways to say "draw this".** Compare:
+
+| | MapLibre (step 2) | Cesium (this extra) |
+|---|---|---|
+| Model | A source and **style rules** for layers | One **entity** per object |
+| Colour | `'circle-color': ['get', 'colour']`: a rule, applied to all features | `e.cylinder.material = …`: set on each entity |
+| New data | `setData(geojson)`, done | Loop over the features and update each entity |
+
+Style rules scale to thousands of features. Entities are easier to reason about, one object at a time, and give you a 3D shape per object.
+
+**3 · Big libraries are loaded on demand.** Cesium is several megabytes. `await import('cesium')` inside `onMount` means the browser only downloads it when someone picks the globe. Open the **Network** tab, reload, and see when the Cesium files arrive.
+
+### The flood layers: same file, same plugin, another engine
+
+Cesium can't read our Cloud-Optimized GeoTIFFs by itself. But it asks for map **tiles** (x, y, zoom), just like MapLibre does, through an *imagery provider*. `cogLayer()` in `CesiumGlobe.svelte` makes a provider that hands each request to the same COG plugin (`cogTile()` in `scenario.js`). So the globe shows the **same files**, with the **same colours** and the **same time step** as the MapLibre page, and nothing was converted. That is the point of an open, tiled format: any engine that speaks "tiles" can use it.
+
+### 3D buildings: why so plain?
+
+The buildings are all 78,045 OpenStreetMap footprints in the area, raised into blocks: the 14,188 exposed ones in their depth colour, the rest grey, so the flooded streets sit in a real city. Every block is **6 m tall** (`BUILDING_HEIGHT_M`, about two storeys), because OpenStreetMap almost never says how tall a building is here: 5 of the 78,045 buildings in the area have a height, and 160 (0.2%) a number of floors.
+
+Ready-made 3D city layers exist, but none without strings attached:
+
+| Layer | What it needs |
+|---|---|
+| **Cesium OSM Buildings** (worldwide, from Cesium) | A free Cesium ion account and an access token |
+| **Google Photorealistic 3D Tiles** | A Google API key with billing |
+| Our own footprints, raised (this extra) | Nothing, but every building is the same height |
+
+A token in a public repository can be copied and misused, so every participant would need their own account. For a class we chose the plain blocks. For a real twin, the building heights (from a survey, LiDAR, or the drone flights on Day 8) are worth a lot more than a nicer viewer.
+
+### 78,045 buildings: entities or one primitive?
+
+The sensor columns are **entities**: one Cesium object per sensor, easy to update and click. That is fine for 33 sensors. For 78,045 buildings it is far too slow and too heavy. So `loadBuildings()` describes each building as a *geometry instance* and hands them all to **one primitive**: Cesium builds the shapes in background workers (`asynchronous: true`) and draws them all in one go. The buildings appear a few seconds after you switch them on.
+
+The price: a building is no longer an entity, so Cesium can't show its info box by itself. `probe()` picks the building under the mouse, reads its properties (the `id` we gave each instance) and opens the info box for it. Easy things become a little harder when you optimise; that trade-off is everywhere in 3D.
+
+### Why the extra copy script?
+
+MapLibre is one JavaScript file plus a worker. Cesium also needs hundreds of plain files at run time (web workers, images, fonts, CSS) and looks for them at `CESIUM_BASE_URL`. SvelteKit serves everything in `static/` as-is, so we copy them there. Every project that uses Cesium solves this somehow; a small script is the most transparent way.
+
+The folder is called `cesium-assets`, not `cesium`, on purpose: `/cesium` is the address of the CesiumJS **page**. With a folder of the same name, nginx would find the folder first, and reloading the page (or sharing its link) would fail. In development you don't notice, because the dev server checks pages first.
+
+### No API key, but…
+
+Cesium's own defaults (world imagery, terrain, the place-search box) come from **Cesium ion**, which needs an account and a key. We switched those off and use OpenStreetMap's raster tiles instead. Their [tile usage policy](https://operations.osmfoundation.org/policies/tiles/) is fine for a class, not for a public app with many users. Check in the **Network** tab: no request goes to `cesium.com`.
+
+OpenStreetMap's standard map is colourful, and so is our data: blue water, yellow, orange and red buildings. So the globe restyles the basemap itself, in `BASEMAP_STYLE` at the top of `CesiumGlobe.svelte`: no colour (`saturation: 0`), lighter, less contrast. Cesium can do that to any imagery layer, and the result looks like the light grey basemap of the MapLibre page. A ready-made light basemap (CARTO, Stadia, Esri) would need an API key or a check of its terms of use.
+
+### Try
+
+- Change `METRES_PER_METRE_OF_WATER` to 100, then to 5000. Which one tells the truth? Which one is useful?
+- Switch to **2D** with the globe button. Is this better or worse than MapLibre?
+- Set `BASEMAP_STYLE` back to `{}` (OSM's own colours). Can you still read the flood and the buildings?
+- Change `BUILDING_HEIGHT_M` in `scenario.js` to 20. Does the map look more real? Is it more true?
+- Tilt the view almost flat. Which sensors disappear behind others?
+
+### Questions
+
+- A 0.94 m column is drawn 940 m tall, next to buildings drawn 6 m tall. Is that a lie? When is exaggeration acceptable on a map?
+- With 0.8 m of water around a 6 m block, what do you learn from the 3D view that the 2D map didn't tell you? What would you need to see *inside* the building (ground floor, basement)?
+- Compare both engines for the job *"Where should the pumps go in the next hour?"*. What does 3D add? What does it cost (download size, laptop battery, the time it takes to find a street)?
+- The Resilient Hydro Twin started on Cesium, and moved to MapLibre after stakeholders said they didn't need 3D. Having tried both: would you have made the same decision for Tambaram? When would you go back to 3D?

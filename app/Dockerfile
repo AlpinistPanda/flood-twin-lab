@@ -10,7 +10,9 @@ FROM node:26-slim AS build
 WORKDIR /app
 
 # Dependencies first, so Docker can cache them (see api/Dockerfile).
+# scripts/ is needed here because "postinstall" copies Cesium's files (the Cesium extra).
 COPY package.json package-lock.json ./
+COPY scripts/ scripts/
 RUN npm ci
 
 COPY . .
