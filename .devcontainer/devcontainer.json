@@ -1,0 +1,20 @@
+{
+  // The development environment for the whole lab, defined as a container.
+  // GitHub Codespaces builds it for you; locally, VS Code "Reopen in Container" does the same.
+  "name": "Flood twin lab",
+  "image": "mcr.microsoft.com/devcontainers/python:3.15-trixie",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "26" },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": { "moby": false }
+  },
+  "postCreateCommand": "npm install -g npm@12 && cd app && npm install",
+  "forwardPorts": [5173],
+  "portsAttributes": {
+    "5173": { "label": "Flood viewer (dev server)", "onAutoForward": "openBrowser" }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["svelte.svelte-vscode", "ms-python.python", "ms-azuretools.vscode-docker"]
+    }
+  }
+}
