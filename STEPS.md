@@ -250,4 +250,55 @@ Without hysteresis the sensor jumps between *watch* and *warning* four times in 
 
 ## Step 4 · Live updates and a "feed lost" indicator → `step-4`
 
+**Goal:** the app asks for new readings by itself, and says loudly when it can't get them. A twin that shows yesterday's map as if it were today's is worse than no twin.
+
+### What changed
+
+Only `app/src/routes/+page.svelte`:
+
+| Piece | What it does |
+|---|---|
+| `POLL_MS`, `tick()` | Ask `/api/live` every 10 s. *Pause*/*Resume* and *Update now* replace the Refresh button |
+| `getJSON()` | Every request gives up after 5 s (`AbortSignal.timeout`). A server that hangs counts as a failure too |
+| `lastOk`, `lastError`, `feed` | The state of the feed: **connecting**, **live**, **delayed** (a request failed, but less than 30 s ago), **lost** (nothing good for 30 s) |
+| Feed lost banner | Dark banner, greyed-out map, "Last known" in front of the warnings |
+
+### Run it
+
+Same two terminals. The dot next to the title should be green: **Live**. Leave the page alone and watch the sensor time move on.
+
+**Now break it.** Press Ctrl+C in the API terminal and watch the page for 30 seconds:
+
+1. After the next poll: orange, **Delayed**.
+2. After 30 s: red, **Feed lost**. The map goes grey, and the warnings say *Last known*.
+3. Start the API again (`python api/main.py`). Within 10 s it is green again, without reloading the page.
+
+### Three ideas to take away
+
+**1 · Polling: `setTimeout`, not `setInterval`.** `tick()` waits for the answer before it schedules the next request. With `setInterval`, a slow server gets a new request every 10 s whether it answered the last one or not, and they pile up exactly when the server is already struggling (during a flood, when everyone opens the map).
+
+**2 · "No news" is not "good news".** When the feed is lost, the page never says *No flood warnings*. It says *Flood warnings unknown*. Look for that `{:else if feed === 'lost'}` in the banner. A false all-clear is the most dangerous thing a flood map can show.
+
+**3 · Keep the last good data, but label it.** On a failure we don't clear the map; we keep the last readings and say how old they are. People can still use them, as long as they know they're old.
+
+### Two kinds of "old"
+
+Step 3 already has *No recent data* for a single sensor that stopped reporting. Step 4 is about the whole **feed**: the connection between your browser and the API. They are different failures with different fixes. A dead sensor needs a technician in Tambaram; a lost feed needs someone to look at the server.
+
+### Try
+
+- Change `FEED_LOST_AFTER_MS` to 5 s. Is the page now more honest, or just more nervous?
+- Make the page stop polling when the browser tab is hidden (`document.visibilityState`). Why would 40 open laptops in a classroom care?
+- Set `POLL_MS` to 1 s and open the **Network** tab in the developer tools. Now picture 10,000 residents during a cyclone. (Lab 7B comes back to this.)
+
+### Questions
+
+- Stop the API and start it again. The sensor time jumps **back** (the replay restarts). The app accepts the older data without a word. In a real feed, when can older data arrive, and what should the app do?
+- The API can be up while the sensors behind it are not: every answer arrives on time, but the readings stop changing. Does our *Live* dot catch that? How would you detect it?
+- The status says "/api/live answered 502". Is that a good message for a duty officer at 3 a.m.? What would you write instead?
+
+---
+
+## Step 5 · Pages, one shared feed, switchable layers → `step-5`
+
 *Coming next.*
