@@ -51,6 +51,8 @@ The model wrote the water depth at 119 moments during the event. We keep one ras
 |---|---|---|
 | `data/flood/max_depth_100yr_utm.tif` | **For analysis** (QGIS, Python). The maximum depth (m) on the model's own grid: WGS 84 / UTM 44N (EPSG:32644), 10 m cells, Float32. **Every value kept**, from 0.007 m up, no rounding. Empty (NaN) where the model never had water. | 2.9 MB |
 | `app/static/layers/max_depth_100yr.tif` | **For the web map.** The same maximum depth, prepared for the browser: reprojected to Web Mercator (EPSG:3857), rounded to the centimetre, cells below 0.05 m empty (dry). Cloud-Optimized GeoTIFF. | 1.9 MB |
+| `app/static/layers/depth_timeseries_100yr.tif` | **For the time slider (step 8).** The depth at every model output, one per hour: 119 bands, Time 0:00 to Time 118:00. Stored the way the RHT platform stores depth: **whole centimetres as 16-bit integers** (`uint16`), 65535 = no data or dry, with a scale factor of 0.01 so QGIS and GDAL show metres. Same Web Mercator grid as the max-depth file. | 16.9 MB |
+| `app/static/layers/depth_timeseries_100yr.json` | Which model step each band holds, the time between steps (60 minutes), and the wet area (km², ≥ 0.05 m) per step. | 2 KB |
 | `app/static/layers/buildings_exposure.geojson` | **Vector.** The 14,188 OpenStreetMap buildings with at least 0.15 m of water, out of 78,045 in the area. `depth_m` is the deepest 10 m cell the building touches; `use` is the OpenStreetMap `building` tag. | 4.1 MB |
 
 Things to notice:
@@ -58,4 +60,6 @@ Things to notice:
 - **Exposure, not damage.** A building with 0.8 m of water is *exposed*. How much damage that causes depends on what the building is, how it is built and what is inside: that is what an impact model such as Delft-FIAT adds, with depth-damage curves.
 - **We don't know what the buildings are.** 99% of the OpenStreetMap buildings here are tagged only `building=yes`. Homes, shops, schools and hospitals look the same to us.
 - **Very deep cells.** A few cells reach 20–35 m. These are lakes and quarries in the terrain model, not streets.
+- **Centimetres, not metres.** Stored as decimal metres (32-bit floats) the time series is about four times larger: for 30 steps we measured 24.7 MB against 6.2 MB as whole centimetres (16-bit integers). Nothing is lost: the web data was already rounded to the centimetre. *Store centimetres, compute in metres.*
+- **Time 0:00 is the start of the model run**, not a clock time. Each step is one hour.
 - **The thin film.** Half of the wet area has less than 5 cm of water. We leave it out (dry), which is a choice: show it, and the whole map turns blue.

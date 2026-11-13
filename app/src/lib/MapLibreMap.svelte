@@ -3,7 +3,16 @@
 	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import SensorDetail from '#lib/SensorDetail.svelte';
-	import { addFloodDepth, addBuildings, floodDepthAt, buildingPopup } from '#lib/scenario.js';
+	import {
+		addFloodDepth,
+		addBuildings,
+		floodDepthAt,
+		buildingPopup,
+		addFloodTimeseries,
+		showFloodStep,
+		floodDepthAtStep,
+		timeseriesInfo
+	} from '#lib/scenario.js';
 
 	// Step 2: the sensors on a 2D web map with MapLibre GL.
 	// The page gives us the data as GeoJSON; this component only draws it.
@@ -90,6 +99,12 @@
 					: null;
 				if (building) {
 					new maplibregl.Popup().setLngLat(e.lngLat).setHTML(buildingPopup(building.properties)).addTo(m);
+				} else if (layers.floodTime.visible) {
+					// Step 8: the depth at this place at the time on the slider.
+					const [depth, info] = await Promise.all([floodDepthAtStep(e.lngLat), timeseriesInfo()]);
+					const hours = (info.steps[layers.floodTime.band] * info.minutes_per_step) / 60;
+					const text = depth == null ? 'Dry at this moment' : `Flood depth: <strong>${depth.toFixed(2)} m</strong>`;
+					new maplibregl.Popup().setLngLat(e.lngLat).setHTML(`${text}<br><small>100-year scenario, Time ${hours}:00</small>`).addTo(m);
 				} else if (layers.flood.visible) {
 					const depth = await floodDepthAt(e.lngLat);
 					const text = depth == null ? 'Dry in this scenario' : `Max flood depth: <strong>${depth.toFixed(2)} m</strong>`;
@@ -126,6 +141,19 @@
 		if (layers.buildings.visible && !map.getLayer('buildings-exposed')) addBuildings(map, underLabels);
 		for (const [id, on] of [['flood-depth', layers.flood.visible], ['buildings-exposed', layers.buildings.visible]]) {
 			if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+		}
+	});
+
+	// Step 8: the flood over time, and the time step chosen with the slider.
+	// Like the max-depth raster, it goes under the buildings and the street names.
+	$effect(() => {
+		if (!map) return;
+		const { visible, band } = layers.floodTime;
+		const below = map.getLayer('buildings-exposed') ? 'buildings-exposed' : map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
+		if (visible && !map.getLayer('flood-time')) addFloodTimeseries(map, band, below);
+		if (map.getLayer('flood-time')) {
+			showFloodStep(map, band, below);
+			map.setLayoutProperty('flood-time', 'visibility', visible ? 'visible' : 'none');
 		}
 	});
 </script>

@@ -478,4 +478,53 @@ From the model's 119 time steps: the highest value per cell (the *maximum* depth
 
 ## Step 8 · The flood over time: a time slider → `step-8`
 
+**Goal:** show the flood as it happens, not only its worst moment. A **multi-temporal raster** (one layer per moment) and a **slider** to move through the event, with a play button.
+
+### What changed
+
+| File | What changed |
+|---|---|
+| `app/static/layers/depth_timeseries_100yr.tif` | **New.** The 100-year scenario hour by hour: 119 moments, one band each (see `data/README.md`) |
+| `app/static/layers/depth_timeseries_100yr.json` | **New.** Which model step each band is, the hour between steps, and how much area is wet |
+| `app/src/lib/FloodTimeBar.svelte` | **New.** The time bar along the bottom of the map: play button, slider with hour ticks, and the wet area through the event |
+| `app/src/routes/maplibre/+page.svelte` | Shows the time bar while the layer is on |
+| `app/src/lib/scenario.js` | Draws the time series; shows the band chosen on the slider; the depth at a click, at that moment |
+| `app/src/lib/layers.svelte.js` | A new layer, `floodTime`, with the slider position in `band`. The two flood layers form a **group** (`GROUPS`) |
+| `app/src/lib/LayerPanel.svelte` | A group is one choice: **None**, **Maximum depth** or **Over time**, with one legend for both |
+| `app/src/lib/MapLibreMap.svelte` | Adds the layer the first time it is chosen |
+
+### Run it
+
+Same two terminals. On the **MapLibre GL** page, choose **Over time** under *Flood depth* in the *Layers* box. A time bar appears along the bottom of the map: press ▶ to play the event (about 30 seconds), or drag the slider. **Time 0:00** is the start of the model run; every step is one hour. Click the map to read the depth at that place, at that moment.
+
+Watch the chart above the slider: the wet area jumps from 3.4 km² to 10.4 km² between Time 26:00 and 27:00, peaks at about 40 km² at Time 59:00, and is still 31 km² at Time 118:00. The water arrives within hours and leaves over days.
+
+### One flood at a time
+
+*Maximum depth* and *Over time* are two views of the same flood, with the same colours. Both on at once would put two blue maps on top of each other, and nobody could tell which blue is which. So the *Layers* box offers them as **one choice**: none, one or the other. In `layers.svelte.js` they stay two layers, each with its own `visible`; the panel just makes sure only one is on (`choose()` in `LayerPanel.svelte`).
+
+### Three ideas to take away
+
+**1 · One file, many moments.** The 119 hours are 119 **bands** of one GeoTIFF, like the red, green and blue bands of a photo. The slider only chooses which band to colour (`colourDepthAtStep` in `scenario.js`). Each piece of the file holds all 119 hours for its area, so after the first view, moving the slider downloads nothing: open the **Network** tab and check.
+
+**2 · Store centimetres, compute in metres.** The RHT platform stores flood depth as whole centimetres in 16-bit integers (`uint16`, 0 to 65,534 cm, with 65535 = no data). As decimal metres the file would be about four times larger; as centimetres it is **16.9 MB** for all 119 hours. A *scale factor* of 0.01 in the file tells QGIS and GDAL to show metres. In our code the colour function gets the raw centimetres and divides by 100; the click function gets metres directly, because the plugin applies the scale factor for it.
+
+**3 · Reprojection is not innocent.** Turning the model's 10 m UTM cells into Web Mercator moves cell edges a little, and every tool makes small choices: which neighbouring cell to take, whether to interpolate. Interpolating *depths* invents values that were never modelled. We use nearest neighbour and an exact transformation for every flood file, so the time series and the max-depth map pick the same cell everywhere. We checked: on all 511,670 wet pixels, no moment is deeper than the maximum.
+
+### Try
+
+- In `FloodTimeBar.svelte`, change the play speed (`250` ms per hour).
+- Switch between **Maximum depth** and **Over time** at the peak (Time 59:00). Where is the maximum already reached, and where does the water come later?
+- With the buildings layer on, play the event. When do the first red buildings get wet?
+
+### Questions
+
+- The slider counts hours from the start of the model run. What would you need to show real clock times (*Tuesday 14:00*), and why does that matter for an evacuation decision?
+- The model wrote one output per hour. What might happen *between* two outputs that the map can't show? When would you want them every 10 minutes, and what would that cost in file size?
+- The scenario is a *what if*; the sensors are *what is*. How would you start a forecast like this one from the sensors' readings right now? (Day 7 morning: AI surrogates.)
+
+---
+
+## Step 9 · The whole twin in containers → `step-9`
+
 *Coming next.*
