@@ -4,14 +4,15 @@
 
 	// Step 5: the frame shared by every map page: the map fills the space, the layer panel
 	// floats on top, and the map goes grey when the feed is lost (step 4).
-	let { children } = $props();
+	// `supported`: which information layers this page can draw (step 7).
+	let { children, supported } = $props();
 </script>
 
 <div class="map-page">
 	<div class="map" class:faded={feed.status === 'lost'}>
 		{@render children()}
 	</div>
-	<LayerPanel />
+	<LayerPanel {supported} />
 </div>
 
 <style>

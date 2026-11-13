@@ -3,6 +3,7 @@
 	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import SensorDetail from '#lib/SensorDetail.svelte';
+	import { addFloodDepth, addBuildings, floodDepthAt, buildingPopup } from '#lib/scenario.js';
 
 	// Step 2: the sensors on a 2D web map with MapLibre GL.
 	// The page gives us the data as GeoJSON; this component only draws it.
@@ -81,6 +82,21 @@
 			m.on('mouseenter', 'sensor-dots', () => (m.getCanvas().style.cursor = 'pointer'));
 			m.on('mouseleave', 'sensor-dots', () => (m.getCanvas().style.cursor = ''));
 
+			// Step 7: a click that misses the sensors: a building? Otherwise the flood depth there.
+			m.on('click', async (e) => {
+				if (m.queryRenderedFeatures(e.point, { layers: ['sensor-dots'] }).length) return; // handled above
+				const building = m.getLayer('buildings-exposed')
+					? m.queryRenderedFeatures(e.point, { layers: ['buildings-exposed'] })[0]
+					: null;
+				if (building) {
+					new maplibregl.Popup().setLngLat(e.lngLat).setHTML(buildingPopup(building.properties)).addTo(m);
+				} else if (layers.flood.visible) {
+					const depth = await floodDepthAt(e.lngLat);
+					const text = depth == null ? 'Dry in this scenario' : `Max flood depth: <strong>${depth.toFixed(2)} m</strong>`;
+					new maplibregl.Popup().setLngLat(e.lngLat).setHTML(`${text}<br><small>100-year scenario</small>`).addTo(m);
+				}
+			});
+
 			map = m;
 		});
 
@@ -96,6 +112,21 @@
 	$effect(() => {
 		const visibility = layers.sensors.visible ? 'visible' : 'none';
 		for (const id of ['sensor-dots', 'sensor-labels']) map?.setLayoutProperty(id, 'visibility', visibility);
+	});
+
+	// Step 7: the scenario layers. Added the first time they are switched on (so nobody downloads
+	// them who doesn't look at them), then only shown and hidden.
+	// They go UNDER the basemap's labels, so street names stay readable on top of the water.
+	$effect(() => {
+		if (!map) return;
+		const underLabels = map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
+		// The raster always goes below the buildings, whichever is switched on first.
+		const underBuildings = map.getLayer('buildings-exposed') ? 'buildings-exposed' : underLabels;
+		if (layers.flood.visible && !map.getLayer('flood-depth')) addFloodDepth(map, underBuildings);
+		if (layers.buildings.visible && !map.getLayer('buildings-exposed')) addBuildings(map, underLabels);
+		for (const [id, on] of [['flood-depth', layers.flood.visible], ['buildings-exposed', layers.buildings.visible]]) {
+			if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+		}
 	});
 </script>
 

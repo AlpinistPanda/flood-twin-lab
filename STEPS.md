@@ -413,4 +413,69 @@ The history is fetched only when you open the **Day** or **Month** tab, and only
 
 ## Step 7 · A flood scenario: one raster, one vector → `step-7`
 
+**Goal:** show that a twin is more than sensors. Add two layers from a flood **model**, a 100-year scenario: the maximum water depth as a **raster**, and the buildings it reaches as a **vector** layer. Both start switched off in the *Layers* box.
+
+### What was done
+
+```bash
+cd app
+npm install @geomatico/maplibre-cog-protocol
+```
+
+| File | What changed |
+|---|---|
+| `app/static/layers/max_depth_100yr.tif` | **New.** The raster for the map: max flood depth, prepared for the browser (see `data/README.md`) |
+| `data/flood/max_depth_100yr_utm.tif` | **New.** The same max depth, untouched, on the model's own grid: open it in QGIS |
+| `app/static/layers/buildings_exposure.geojson` | **New.** The vector: 14,188 buildings with at least 0.15 m of water |
+| `app/src/lib/scenario.js` | **New.** How to draw both, the depth colours, reading a depth at a click |
+| `app/src/lib/layers.svelte.js` | Two new entries: `buildings` and `flood` |
+| `app/src/lib/LayerPanel.svelte` | A legend per layer; layers a page can't draw are greyed out |
+| `app/src/lib/MapLibreMap.svelte` | Adds the layers the first time they are switched on; clicks on buildings and on the flood map |
+
+### Run it
+
+Same two terminals. On the **MapLibre GL** page, tick **Max flood depth** and **Buildings exposed** in the *Layers* box. Zoom in. Click a building, then click a blue area away from buildings.
+
+### Raster and vector, side by side
+
+| | Raster: flood depth | Vector: buildings |
+|---|---|---|
+| What it is | A grid: one number per 10 m cell | Shapes, each with properties |
+| File | Cloud-Optimized GeoTIFF (1.9 MB) | GeoJSON (4.1 MB) |
+| How it reaches the map | The plugin reads only the parts of the file it needs (HTTP **range requests**) and turns them into tiles in the browser | MapLibre downloads the whole file once |
+| Colour | `colourDepth()` in `scenario.js`, called for every pixel | A style rule on `depth_m`, like the sensors in step 2 |
+| Click | `locationValues()` reads the number in the file at that spot | The feature's properties |
+
+**1 · Static files, no server.** Both layers are plain files in `app/static/`, served like an image. No tile server, no database. Open the **Network** tab, switch on the flood layer, and pan: you'll see requests for the *same* `.tif` file, each with a `Range:` header asking for a different piece of it. That is what "cloud-optimized" means.
+
+**2 · The same thresholds everywhere.** Buildings are coloured with the sensors' levels from step 3 (*Watch* 0.15 m, *Warning* 0.30 m, *Danger* 0.50 m). A red building and a red sensor mean the same thing. The raster uses blues instead, because it shows depth itself, not a decision.
+
+**3 · Model vs measurement.** The sensors say what the water **is** doing. The scenario says what it **could** do in a 1-in-100-year event. Put them on one map and the questions start: is the scenario's 0.84 m near a sensor plausible? Did any sensor ever see that?
+
+### Overviews: why the click reads at full resolution
+
+A COG contains the data several times: full resolution, plus smaller copies (**overviews**) for zoomed-out views. When you zoom out, the plugin draws from an overview, which is fast but coarse. For a **click** we always ask for the full-resolution value (`floodDepthAt` in `scenario.js`). At zoom 12, an overview can give 0.21 m where the real value is 0.84 m.
+
+### How the files were made
+
+From the model's 119 time steps: the highest value per cell (the *maximum* depth), cells below 0.05 m dropped, reprojected to Web Mercator and written as a COG with GDAL. Building outlines from OpenStreetMap; for each building, the deepest cell it touches. The script is not in this repository, but every step is a standard GDAL or GeoPandas operation.
+
+### Try
+
+- Open `data/flood/max_depth_100yr_utm.tif` in QGIS next to the web version. Where do they differ, and why? (Projection, rounding, the thin film below 0.05 m.)
+- In `scenario.js`, change the depth classes in `DEPTH_CLASSES`, or start the colours at 0.15 m instead of 0.05 m. How much of the map stays blue?
+- Change `raster-opacity`. Can you still read the streets?
+- Colour the buildings by the raster's blue classes instead of the sensor levels. Which version would you show a city official?
+
+### Questions
+
+- 14,188 buildings are exposed. How many of them are homes, and how many are schools or hospitals? Can this data tell you? What would you need?
+- **Exposure is not damage.** What does an impact model such as Delft-FIAT add on top of this layer? (Hint: depth-damage curves, building values, people.)
+- The scenario is a static file; the sensors are live. Which of the two would you trust in the middle of a real flood, and for which decision?
+- The raster is 1.9 MB for one scenario and one variable. The RHT platform serves many scenarios, time steps and variables. Static files, or a tile server such as TiTiler? (Lab 7B.)
+
+---
+
+## Step 8 · The flood over time: a time slider → `step-8`
+
 *Coming next.*
