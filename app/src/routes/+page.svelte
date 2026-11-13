@@ -1,11 +1,17 @@
 <script>
 	import { onMount } from 'svelte';
+	import MapLibreMap from '#lib/MapLibreMap.svelte';
+	import { toGeoJSON, showTime, showAge } from '#lib/sensors.js';
 
-	// Step 1: ask the sensor API for the sites and their latest readings, and show them as a table.
+	// Step 1: ask the sensor API for the sites and their latest readings.
+	// Step 2: show them on a map as well as in the table.
 
 	let sites = $state([]); // from /api/sites: where each sensor is
 	let live = $state(null); // from /api/live: the latest reading of each sensor
 	let error = $state(null);
+
+	// The same data as GeoJSON for the map. $derived recomputes it whenever sites or live change.
+	let geojson = $derived(toGeoJSON(sites, live));
 
 	async function load() {
 		error = null;
@@ -20,25 +26,6 @@
 	}
 
 	onMount(load);
-
-	// Times in the API are Unix seconds in UTC. Convert them only for display.
-	function showTime(seconds) {
-		if (seconds == null) return '–';
-		return new Date(seconds * 1000).toLocaleString('en-GB', {
-			timeZone: 'Asia/Kolkata',
-			day: '2-digit',
-			month: 'short',
-			hour: '2-digit',
-			minute: '2-digit'
-		});
-	}
-
-	function showAge(seconds) {
-		if (seconds == null) return '–';
-		if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
-		if (seconds < 86400) return `${Math.round(seconds / 3600)} h`;
-		return `${Math.round(seconds / 86400)} days`;
-	}
 
 	// Look up a site's latest reading by its id.
 	function readingFor(id) {
@@ -62,6 +49,8 @@
 		<p class="error">{error}</p>
 	{/if}
 
+	<MapLibreMap {geojson} />
+
 	<table>
 		<thead>
 			<tr><th>Site</th><th>Type</th><th>Depth (m)</th><th>Measured</th><th>Age</th></tr>
@@ -84,13 +73,14 @@
 <style>
 	main {
 		font-family: system-ui, sans-serif;
-		max-width: 46rem;
+		max-width: 60rem;
 		margin: 2rem auto;
 		padding: 0 1rem;
 	}
 	table {
 		border-collapse: collapse;
 		width: 100%;
+		margin-top: 1rem;
 	}
 	th,
 	td {

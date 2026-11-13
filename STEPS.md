@@ -127,4 +127,62 @@ Open port **8000** and add `/docs` to the address. FastAPI shows every endpoint,
 
 ## Step 2 · MapLibre GL: sensors on a map → `step-2`
 
+**Goal:** the same 33 sensors, now as dots on a 2D web map. Click a dot to see its latest reading.
+
+### What was done
+
+```bash
+cd app
+npm install maplibre-gl
+```
+
+| File | What changed |
+|---|---|
+| `app/src/lib/sensors.js` | **New.** `toGeoJSON()` turns sites + readings into GeoJSON. The time helpers moved here from the page |
+| `app/src/lib/MapLibreMap.svelte` | **New.** The map component: basemap, a source, two layers, a popup |
+| `app/src/routes/+page.svelte` | Builds the GeoJSON with `$derived` and puts `<MapLibreMap {geojson} />` above the table |
+| `app/src/routes/+page.js` | **New.** `ssr = false`: this page is rendered only in the browser |
+| `app/vite.config.js` | `optimizeDeps.exclude`: keeps MapLibre's web worker working in the dev server |
+
+### Run it
+
+Same two terminals as step 1. Open port **5173**: the map is above the table. Zoom in until the sensor ids appear, and click a dot.
+
+### Three ideas to take away
+
+**1 · GeoJSON is the common language.** The API gives us its own JSON. We turn it into GeoJSON once (`toGeoJSON`), and from then on any web map can draw it: MapLibre here, and CesiumJS or deck.gl in the optional extras at the end. Note the order: GeoJSON is **[lon, lat]**, not [lat, lon]. Swap them and Tambaram ends up in the Southern Ocean.
+
+**2 · Source + layer.** MapLibre separates *what* from *how*:
+
+```js
+m.addSource('sensors', { type: 'geojson', data: geojson });       // what: the data
+m.addLayer({ id: 'sensor-dots', type: 'circle', source: 'sensors', // how: draw it as circles
+             paint: { 'circle-radius': 7, 'circle-color': '#1f6fb2' } });
+```
+
+One source can feed several layers: here a `circle` layer for the dots and a `symbol` layer for the labels. When new data arrives, we only call `setData()` on the source; every layer redraws by itself.
+
+**3 · The basemap is someone else's server.** The grey streets come from OpenFreeMap, a free vector tile service built on OpenStreetMap. No API key, but your map now depends on it. Open your browser's developer tools (**Network** tab) and pan the map: every request to `tiles.openfreemap.org` is a piece of the basemap. In a real twin you decide whether you can live with that, or host the tiles yourself.
+
+### Why `ssr = false`?
+
+SvelteKit normally renders a page once on the server, then again in the browser. A web map needs things only a browser has: a canvas, WebGL, the window size. `export const ssr = false` in `+page.js` says: skip the server, render this page in the browser only.
+
+### Try
+
+- In `MapLibreMap.svelte`, change `circle-color` and `circle-radius`. Save and watch the map update.
+- Change the style URL from `positron` to `liberty` or `bright`.
+- Change `minzoom: 13` on the label layer. What happens at 10? At 16?
+- Make the radius depend on the data: `'circle-radius': ['interpolate', ['linear'], ['get', 'depth_m'], 0, 5, 0.5, 15]`. What happens to the sensors with negative depths? (Step 3 deals with that properly.)
+
+### Questions
+
+- Every dot is the same colour. Looking only at the map, can you tell where it is flooding? What would you need?
+- TBM-01 still shows −7.49 m from 12 days ago, as a dot that looks exactly like a fresh one. Is that a problem? How would you show it?
+- TBM-16 and TBM-17 have exactly the same coordinates, so one dot hides the other. Which one do you see when you click? How should a map show two sensors in one place?
+
+---
+
+## Step 3 · Threshold colours, alert banner, hysteresis → `step-3`
+
 *Coming next.*

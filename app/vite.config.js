@@ -18,6 +18,12 @@ export default defineConfig({
 		})
 	],
 
+	// Step 2: MapLibre loads a web worker from a file next to its own code. Vite's dependency
+	// pre-bundling would move that code and break the worker, so leave MapLibre as it is.
+	optimizeDeps: {
+		exclude: ['maplibre-gl']
+	},
+
 	// Step 1: the browser asks this dev server for /api/…, and the dev server passes the
 	// request on to the sensor API. The browser only ever talks to one address.
 	server: {
