@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 0 · An empty SvelteKit app · Flood twin build guide</title>
+<link rel="stylesheet" href="assets/guide.css">
+<script>try{const t=localStorage.getItem('guide-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header class="top">
+  <button class="menu" type="button" aria-label="Show steps" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">Flood twin <span>build guide</span></a>
+  <a class="repo" href="https://github.com/AlpinistPanda/flood-twin-lab">GitHub</a>
+  <button class="theme" type="button" aria-label="Switch light or dark">◐</button>
+</header>
+<div class="layout">
+  <aside class="side"><nav aria-label="Steps"><ol><li><a href="index.html">Overview</a></li><li><a href="00-sveltekit.html" aria-current="page">0 · An empty SvelteKit app</a></li><li><a href="01-feed-table.html">1 · The live feed as a table</a></li><li><a href="02-maplibre.html">2 · Sensors on a map</a></li><li><a href="03-thresholds.html">3 · Thresholds and alerts</a></li><li><a href="04-live.html">4 · Live updates</a></li><li><a href="05-pages-layers.html">5 · Pages and layers</a></li><li><a href="06-charts.html">6 · Charts in the popup</a></li><li><a href="07-flood-layers.html">7 · Flood raster and vector</a></li><li><a href="08-flood-time.html">8 · The flood over time</a></li><li><a href="09-containers.html">9 · Containers</a></li><li><a href="api.html">The sensor API</a></li></ol></nav></aside>
+  <main>
+    <article>
+<h1 id="step-0--an-empty-sveltekit-app">Step 0 · An empty SvelteKit app</h1>
+<p><a href="index.html">Guide overview</a> · <a href="01-feed-table.html">Step 1 →</a></p>
+<p><strong>You build:</strong> a new SvelteKit web app, running in your browser.
+<strong>You learn:</strong> what SvelteKit is, how to create a project, what its files do, the dev server.
+<strong>Time:</strong> about 20 minutes.
+<strong>Start from:</strong> the <code>start</code> branch (see <a href="index.html#before-you-start">Before you start</a>). The reference for the end of this step is the tag <code>step-0</code>.</p>
+<hr />
+<h2 id="why-sveltekit">Why SvelteKit?</h2>
+<p>A twin's web viewer is more than one page with one map: there's a map page, a table page, maybe a 3D page, shared settings, data that keeps updating. You could write all of that in plain HTML and JavaScript, but you'd spend most of your time keeping the page in sync with the data.</p>
+<p><strong>Svelte</strong> is a tool that does that for you: you say <em>what</em> the page should look like for the current data, and Svelte updates the page whenever the data changes. <strong>SvelteKit</strong> adds what an app needs around it: pages with their own addresses (<code>/maplibre</code>, <code>/sensors</code>), a development server, and a way to build the finished app for production.</p>
+<p>Other frameworks (React, Vue, Angular) do the same job. The Resilient Hydro Twin uses SvelteKit, and so do we.</p>
+<h2 id="01--look-at-what-you-have">0.1 · Look at what you have</h2>
+<p>Your Codespace (or your clone) has these folders:</p>
+<table>
+<thead>
+<tr>
+<th>Folder / file</th>
+<th>What</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>data/</code></td>
+<td>30 days of readings from 33 sensors, and a flood scenario</td>
+</tr>
+<tr>
+<td><code>api/</code></td>
+<td>The sensor API (see <a href="api.html">The sensor API</a>)</td>
+</tr>
+<tr>
+<td><code>loadtest/</code></td>
+<td>A load test, for step 9</td>
+</tr>
+<tr>
+<td><code>guide/</code></td>
+<td>This guide</td>
+</tr>
+<tr>
+<td><code>.devcontainer/</code></td>
+<td>How the Codespace is set up: Node.js 26, Python 3.15, Docker</td>
+</tr>
+</tbody>
+</table>
+<p>Check the tools in the terminal:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>node<span class="w"> </span>--version<span class="w">     </span><span class="c1"># v26…</span>
+npm<span class="w"> </span>--version<span class="w">      </span><span class="c1"># 12…</span>
+python<span class="w"> </span>--version<span class="w">   </span><span class="c1"># Python 3.15…</span>
+</code></pre></div>
+<h2 id="02--create-the-app">0.2 · Create the app</h2>
+<p>In the repository folder:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>npx<span class="w"> </span>sv@1.3.0<span class="w"> </span>create<span class="w"> </span>app<span class="w"> </span>--template<span class="w"> </span>minimal<span class="w"> </span>--no-types<span class="w"> </span>--no-add-ons<span class="w"> </span>--install<span class="w"> </span>npm
+</code></pre></div>
+<p>What that says:</p>
+<table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>npx sv@1.3.0</code></td>
+<td>Download and run version 1.3.0 of <code>sv</code>, the official tool to create SvelteKit projects</td>
+</tr>
+<tr>
+<td><code>create app</code></td>
+<td>Make a new project in a folder called <code>app</code></td>
+</tr>
+<tr>
+<td><code>--template minimal</code></td>
+<td>The smallest project: one page, no demo</td>
+</tr>
+<tr>
+<td><code>--no-types</code></td>
+<td>Plain JavaScript, not TypeScript. Easier to start with</td>
+</tr>
+<tr>
+<td><code>--no-add-ons</code></td>
+<td>Nothing extra (no test tools, no CSS frameworks)</td>
+</tr>
+<tr>
+<td><code>--install npm</code></td>
+<td>Install the packages straight away with npm</td>
+</tr>
+</tbody>
+</table>
+<p><code>npx</code> may ask <em>Ok to proceed? (y)</em>: press Enter. After a minute you see <em>You're all set!</em></p>
+<h2 id="03--run-it">0.3 · Run it</h2>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="nb">cd</span><span class="w"> </span>app
+npm<span class="w"> </span>run<span class="w"> </span>dev
+</code></pre></div>
+<p>The <strong>dev server</strong> starts on port <strong>5173</strong>. Open it (pop-up, or the <strong>Ports</strong> tab). You see <em>Welcome to SvelteKit</em>.</p>
+<p>Now open <code>app/src/routes/+page.svelte</code> in the editor, change the heading, and save. The browser updates by itself, without reloading. That's <strong>hot reload</strong>: you will use it in every step.</p>
+<p>Stop the dev server with <strong>Ctrl+C</strong> when you're done.</p>
+<h2 id="04--know-your-files">0.4 · Know your files</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>app/package.json</code></td>
+<td>The app's name, its <strong>scripts</strong> (<code>npm run dev</code>, <code>npm run build</code>) and the <strong>packages</strong> it uses</td>
+</tr>
+<tr>
+<td><code>app/package-lock.json</code></td>
+<td>The exact version of every package that was installed. Commit it: everyone gets the same versions</td>
+</tr>
+<tr>
+<td><code>app/node_modules/</code></td>
+<td>The installed packages. Big, never commit it (it is in <code>.gitignore</code>)</td>
+</tr>
+<tr>
+<td><code>app/vite.config.js</code></td>
+<td>Settings for <strong>Vite</strong>, the tool that runs the dev server and builds the app, and for SvelteKit inside it</td>
+</tr>
+<tr>
+<td><code>app/src/app.html</code></td>
+<td>The HTML shell every page is put into</td>
+</tr>
+<tr>
+<td><code>app/src/routes/</code></td>
+<td>The <strong>pages</strong>. Every folder in here is an address: <code>routes/sensors/+page.svelte</code> becomes <code>/sensors</code></td>
+</tr>
+<tr>
+<td><code>app/src/routes/+page.svelte</code></td>
+<td>The page at <code>/</code></td>
+</tr>
+<tr>
+<td><code>app/src/routes/+layout.svelte</code></td>
+<td>The frame around every page. Right now it only adds the icon and shows the page</td>
+</tr>
+<tr>
+<td><code>app/src/lib/</code></td>
+<td>Your own code that pages share: components, helpers</td>
+</tr>
+<tr>
+<td><code>app/static/</code></td>
+<td>Files served as they are (<code>static/robots.txt</code> → <code>/robots.txt</code>)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="lib-importing-your-own-files"><code>#lib</code>: importing your own files</h3>
+<p>Look at <code>package.json</code>:</p>
+<div class="code" data-lang="json"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="nt">&quot;imports&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;#lib&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;./src/lib/index.js&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;#lib/*&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;./src/lib/*&quot;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>This lets you write <code>import { something } from '#lib/sensors.js'</code> from any file, however deep it is, instead of <code>'../../lib/sensors.js'</code>. (Older SvelteKit projects use <code>$lib</code> for the same thing.)</p>
+<h3 id="a-svelte-file">A <code>.svelte</code> file</h3>
+<p>A Svelte <strong>component</strong> is one file with up to three parts:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="c1">// JavaScript: the data and what to do with it</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="s1">&#39;Tambaram&#39;</span><span class="p">);</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+<span class="cm">&lt;!-- HTML: what to show. {…} puts a JavaScript value in the page --&gt;</span>
+<span class="p">&lt;</span><span class="nt">h1</span><span class="p">&gt;</span>Water levels in {name}<span class="p">&lt;/</span><span class="nt">h1</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">style</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="c">/* CSS: only for this component, it can&#39;t leak into others */</span>
+<span class="w">	</span><span class="nt">h1</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#1f6fb2</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">style</span><span class="p">&gt;</span>
+</code></pre></div>
+<p><code>$state(…)</code> is a <strong>rune</strong>: it tells Svelte &quot;when this value changes, update the page&quot;. You meet the other runes (<code>$derived</code>, <code>$props</code>, <code>$effect</code>) in the next steps. In <code>vite.config.js</code> you'll see <code>runes: …</code>: that switches every component in the project to this way of writing.</p>
+<h2 id="05--save-your-work">0.5 · Save your work</h2>
+<p>In the repository folder (<code>cd ..</code> from <code>app/</code>):</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>git<span class="w"> </span>add<span class="w"> </span>-A
+git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;My step 0: an empty SvelteKit app&quot;</span>
+</code></pre></div>
+<h2 id="check">Check</h2>
+<ul>
+<li>[ ] <code>npm run dev</code> in <code>app/</code> starts the dev server without errors.</li>
+<li>[ ] Port 5173 shows your page, and a change in <code>+page.svelte</code> appears in the browser when you save.</li>
+<li>[ ] <code>git status</code> says <em>nothing to commit</em>, and <code>node_modules</code> was not committed (<code>git show --stat HEAD | grep node_modules</code> prints nothing).</li>
+</ul>
+<h2 id="stuck">Stuck?</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Try</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sv</code> asks questions instead of creating the project</td>
+<td>You missed one of the options. Answer: <em>minimal</em>, <em>No</em> for TypeScript, no add-ons, <em>npm</em></td>
+</tr>
+<tr>
+<td><code>Directory not empty</code></td>
+<td>There is already an <code>app</code> folder. Remove it (<code>rm -rf app</code>) and run the command again</td>
+</tr>
+<tr>
+<td>Port 5173 doesn't open</td>
+<td><strong>Ports</strong> tab → right-click 5173 → <em>Open in Browser</em></td>
+</tr>
+</tbody>
+</table>
+<p>Or take over the reference: <code>git checkout step-0 -- app</code>, then <code>cd app &amp;&amp; npm install</code>.</p>
+<p>The reference files of this step (the ones <code>sv</code> made, and the only ones you'll edit later):</p>
+<details>
+<summary>📄 <code>app/package.json</code> as it is at <code>step-0</code></summary>
+<div class="code" data-lang="json"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">{</span>
+<span class="w">	</span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;app&quot;</span><span class="p">,</span>
+<span class="w">	</span><span class="nt">&quot;version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;0.0.1&quot;</span><span class="p">,</span>
+<span class="w">	</span><span class="nt">&quot;private&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">	</span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;module&quot;</span><span class="p">,</span>
+<span class="w">	</span><span class="nt">&quot;imports&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nt">&quot;#lib&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;./src/lib/index.js&quot;</span><span class="p">,</span>
+<span class="w">		</span><span class="nt">&quot;#lib/*&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;./src/lib/*&quot;</span>
+<span class="w">	</span><span class="p">},</span>
+<span class="w">	</span><span class="nt">&quot;scripts&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nt">&quot;dev&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;vite dev&quot;</span><span class="p">,</span>
+<span class="w">		</span><span class="nt">&quot;build&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;vite build&quot;</span><span class="p">,</span>
+<span class="w">		</span><span class="nt">&quot;preview&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;vite preview&quot;</span><span class="p">,</span>
+<span class="w">		</span><span class="nt">&quot;prepare&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;svelte-kit sync || echo &#39;&#39;&quot;</span>
+<span class="w">	</span><span class="p">},</span>
+<span class="w">	</span><span class="nt">&quot;devDependencies&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nt">&quot;@sveltejs/adapter-auto&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;^8.0.0&quot;</span><span class="p">,</span>
+<span class="w">		</span><span class="nt">&quot;@sveltejs/kit&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;^3.0.0&quot;</span><span class="p">,</span>
+<span class="w">		</span><span class="nt">&quot;@sveltejs/vite-plugin-svelte&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;^7.2.0&quot;</span><span class="p">,</span>
+<span class="w">		</span><span class="nt">&quot;svelte&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;^5.57.2&quot;</span><span class="p">,</span>
+<span class="w">		</span><span class="nt">&quot;vite&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;^8.3.0&quot;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+</details>
+<details>
+<summary>📄 <code>app/vite.config.js</code> as it is at <code>step-0</code></summary>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">import</span><span class="w"> </span><span class="nx">adapter</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;@sveltejs/adapter-auto&#39;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">sveltekit</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;@sveltejs/kit/vite&#39;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">defineConfig</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;vite&#39;</span><span class="p">;</span>
+
+<span class="k">export</span><span class="w"> </span><span class="k">default</span><span class="w"> </span><span class="nx">defineConfig</span><span class="p">({</span>
+<span class="w">	</span><span class="nx">plugins</span><span class="o">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">		</span><span class="nx">sveltekit</span><span class="p">({</span>
+<span class="w">			</span><span class="nx">compilerOptions</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">				</span><span class="c1">// Force runes mode for the project, except for libraries. Can be removed in svelte 6.</span>
+<span class="w">				</span><span class="nx">runes</span><span class="o">:</span><span class="w"> </span><span class="p">({</span><span class="w"> </span><span class="nx">filename</span><span class="w"> </span><span class="p">})</span><span class="w"> </span><span class="p">=&gt;</span>
+<span class="w">					</span><span class="nx">filename</span><span class="p">.</span><span class="nx">split</span><span class="p">(</span><span class="sr">/[/\\]/</span><span class="p">).</span><span class="nx">includes</span><span class="p">(</span><span class="s1">&#39;node_modules&#39;</span><span class="p">)</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="kc">undefined</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">			</span><span class="p">},</span>
+
+<span class="w">			</span><span class="c1">// adapter-auto only supports some environments, see https://svelte.dev/docs/kit/adapter-auto for a list.</span>
+<span class="w">			</span><span class="c1">// If your environment is not supported, or you settled on a specific environment, switch out the adapter.</span>
+<span class="w">			</span><span class="c1">// See https://svelte.dev/docs/kit/adapters for more information about adapters.</span>
+<span class="w">			</span><span class="nx">adapter</span><span class="o">:</span><span class="w"> </span><span class="nx">adapter</span><span class="p">()</span>
+<span class="w">		</span><span class="p">})</span>
+<span class="w">	</span><span class="p">]</span>
+<span class="p">});</span>
+</code></pre></div>
+</details>
+<details>
+<summary>📄 <code>app/src/routes/+layout.svelte</code> as it is at <code>step-0</code></summary>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="nx">favicon</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/assets/favicon.svg&#39;</span><span class="p">;</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">children</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$props</span><span class="p">();</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">svelte:head</span><span class="p">&gt;</span>
+	<span class="p">&lt;</span><span class="nt">link</span> <span class="na">rel</span><span class="o">=</span><span class="s">&quot;icon&quot;</span> <span class="na">href</span><span class="o">=</span><span class="s">{favicon}</span> <span class="p">/&gt;</span>
+<span class="p">&lt;/</span><span class="nt">svelte:head</span><span class="p">&gt;</span>
+
+{@render children()}
+</code></pre></div>
+</details>
+<hr />
+<h2 id="walkthrough-step-0-in-small-pieces-with-all-the-code">Walkthrough: step 0 in small pieces, with all the code</h2>
+<p>The same step as above, but cut into small pieces. Each piece gives you the code, tells you where it goes, and ends with something you can <strong>see</strong>. Do them in order; don't start the next piece until you see what the last one promises.</p>
+<h3 id="0a--bring-sveltekit-alive">0.A · Bring SvelteKit alive</h3>
+<p>In the repository folder (in a Codespace that is <code>/workspaces/flood-twin-lab</code>):</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>npx<span class="w"> </span>sv@1.3.0<span class="w"> </span>create<span class="w"> </span>app<span class="w"> </span>--template<span class="w"> </span>minimal<span class="w"> </span>--no-types<span class="w"> </span>--no-add-ons<span class="w"> </span>--install<span class="w"> </span>npm
+<span class="nb">cd</span><span class="w"> </span>app
+npm<span class="w"> </span>run<span class="w"> </span>dev
+</code></pre></div>
+<p><strong>You see:</strong> in the terminal, <code>VITE … ready</code> and <code>Local: http://localhost:5173/</code>. Open port 5173: <em>Welcome to SvelteKit</em>.</p>
+<p>Leave <code>npm run dev</code> running for the rest of this walkthrough. Every time you save a file, the browser updates.</p>
+<h3 id="0b--your-own-first-page">0.B · Your own first page</h3>
+<p>Open <code>app/src/routes/+page.svelte</code>. Replace everything in it with:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">h1</span><span class="p">&gt;</span>Flood twin · Tambaram<span class="p">&lt;/</span><span class="nt">h1</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">p</span><span class="p">&gt;</span>33 water-level sensors. Nothing to see yet.<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+</code></pre></div>
+<p><strong>You see:</strong> your heading, a second after you save.</p>
+<h3 id="0c--a-value-in-the-page">0.C · A value in the page</h3>
+<p>Values from JavaScript go into the HTML between <code>{ }</code>:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">area</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;Tambaram&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">sensors</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">33</span><span class="p">;</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">h1</span><span class="p">&gt;</span>Flood twin · {area}<span class="p">&lt;/</span><span class="nt">h1</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">p</span><span class="p">&gt;</span>{sensors} water-level sensors. Nothing to see yet.<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+</code></pre></div>
+<p><strong>You see:</strong> the same page, but the text now comes from the variables. Change <code>sensors</code> to <code>34</code> and save.</p>
+<h3 id="0d--a-value-that-changes-state">0.D · A value that changes: <code>$state</code></h3>
+<p>A normal variable is drawn once. A <code>$state</code> variable is drawn <strong>again every time it changes</strong>. That is the whole idea of Svelte:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">area</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;Tambaram&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">clicks</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="mf">0</span><span class="p">);</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">h1</span><span class="p">&gt;</span>Flood twin · {area}<span class="p">&lt;/</span><span class="nt">h1</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">button</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{()</span> <span class="err">=</span><span class="p">&gt;</span> clicks++}&gt;Clicked {clicks} times<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+</code></pre></div>
+<p><strong>You see:</strong> a button whose text counts your clicks. Now remove <code>$state(…)</code> (write <code>let clicks = 0;</code>) and try again: the number in the button doesn't change any more, although <code>clicks</code> does. Put <code>$state</code> back.</p>
+<h3 id="0e--a-value-computed-from-another-derived">0.E · A value computed from another: <code>$derived</code></h3>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">depth</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="mf">0.1</span><span class="p">);</span><span class="w"> </span><span class="c1">// metres</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">deep</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">depth</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mf">0.3</span><span class="p">);</span><span class="w"> </span><span class="c1">// recomputed by itself when depth changes</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">p</span><span class="p">&gt;</span>Depth: {depth.toFixed(2)} m · {deep ? &#39;Warning!&#39; : &#39;OK&#39;}<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">button</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{()</span> <span class="err">=</span><span class="p">&gt;</span> (depth += 0.05)}&gt;More water<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">button</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{()</span> <span class="err">=</span><span class="p">&gt;</span> (depth = 0.1)}&gt;Reset<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+</code></pre></div>
+<p><strong>You see:</strong> click <em>More water</em> a few times: at 0.30 m it says <em>Warning!</em>. You never told the page to recompute <code>deep</code>: <code>$derived</code> did. You'll use exactly this in step 3.</p>
+<h3 id="0f--style-that-stays-in-its-component">0.F · Style that stays in its component</h3>
+<p>Add at the end of the file:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">style</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="nt">p</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">font-family</span><span class="p">:</span><span class="w"> </span><span class="n">system-ui</span><span class="p">,</span><span class="w"> </span><span class="kc">sans-serif</span><span class="p">;</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">1.2</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">style</span><span class="p">&gt;</span>
+</code></pre></div>
+<p><strong>You see:</strong> a bigger, cleaner font, only in this component. CSS in a <code>.svelte</code> file can't leak into other components.</p>
+<h3 id="0g--a-second-page">0.G · A second page</h3>
+<p>Create the folder <code>app/src/routes/about/</code> and in it a file <code>+page.svelte</code>:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">h1</span><span class="p">&gt;</span>About<span class="p">&lt;/</span><span class="nt">h1</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">p</span><span class="p">&gt;</span>A teaching twin. <span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/&quot;</span><span class="p">&gt;</span>Back to the start<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+</code></pre></div>
+<p><strong>You see:</strong> open <code>/about</code> (add it to the address in the browser): your second page. The folder name is the address. Step 5 uses this for the map page and the sensor table. Delete the <code>about</code> folder again when you're done.</p>
+<h3 id="0h--save">0.H · Save</h3>
+<p>Put back the welcome text you like in <code>+page.svelte</code> (step 1 replaces it anyway), then in the repository folder:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>git<span class="w"> </span>add<span class="w"> </span>-A
+git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;My step 0: an empty SvelteKit app&quot;</span>
+</code></pre></div>
+<hr />
+<p><a href="01-feed-table.html">Step 1 · The live feed as a table →</a></p>
+
+    </article>
+    <nav class="next" aria-label="Previous and next"><a class="prev" href="index.html"><span>Previous</span>Overview</a><a class="nxt" href="01-feed-table.html"><span>Next</span>1 · The live feed as a table</a></nav>
+  </main>
+  <nav class="toc" aria-label="On this page"><p>On this page</p><ol><li><a href="#why-sveltekit">Why SvelteKit?</a></li><li><a href="#01--look-at-what-you-have">0.1 · Look at what you have</a></li><li><a href="#02--create-the-app">0.2 · Create the app</a></li><li><a href="#03--run-it">0.3 · Run it</a></li><li><a href="#04--know-your-files">0.4 · Know your files</a></li><li><a href="#05--save-your-work">0.5 · Save your work</a></li><li><a href="#check">Check</a></li><li><a href="#stuck">Stuck?</a></li><li><a href="#walkthrough-step-0-in-small-pieces-with-all-the-code">Walkthrough: step 0 in small pieces, with all the code</a></li></ol></nav>
+</div>
+<script src="assets/guide.js"></script>
+</body>
+</html>

@@ -36,7 +36,7 @@ git checkout step-2      # jump to the end of step 2
 
 The full step-by-step walkthrough is in **[STEPS.md](STEPS.md)**: what each step does, and why.
 
-**Build it yourself:** the **[build guide](guide/README.md)** takes you from an empty folder to the whole twin in containers, in the same ten steps: what to write, in which file, how to check it, and how to catch up from the step's tag if you get stuck. You build the web app; the sensor API is given ([how to connect to it](guide/api.md)). Start from the branch `start`.
+**Build it yourself:** the **[build guide](https://alpinistpanda.github.io/flood-twin-lab/)** takes you from an empty folder to the whole twin in containers, in the same ten steps: what to write, in which file, how to check it, and how to catch up from the step's tag if you get stuck. You build the web app; the sensor API is given ([how to connect to it](https://alpinistpanda.github.io/flood-twin-lab/api.html)). Start from the branch `start`.
 
 ## Start
 
@@ -78,7 +78,7 @@ The `flood-twin` environment contains Python 3.15, Node.js 26 and the API's pack
 | `api/` | The sensor API: replays the data as if it were live (Python, FastAPI) |
 | `app/` | The SvelteKit web app |
 | `STEPS.md` | Step-by-step walkthrough: what each step does, and why |
-| `guide/` | Build guide: build the twin yourself, step by step |
+| `guide/` | Build guide (HTML, published on GitHub Pages; generated, do not edit by hand): build the twin yourself, step by step |
 
 ## Credits & licence
 

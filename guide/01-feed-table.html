@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 1 · The live feed as a table · Flood twin build guide</title>
+<link rel="stylesheet" href="assets/guide.css">
+<script>try{const t=localStorage.getItem('guide-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header class="top">
+  <button class="menu" type="button" aria-label="Show steps" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">Flood twin <span>build guide</span></a>
+  <a class="repo" href="https://github.com/AlpinistPanda/flood-twin-lab">GitHub</a>
+  <button class="theme" type="button" aria-label="Switch light or dark">◐</button>
+</header>
+<div class="layout">
+  <aside class="side"><nav aria-label="Steps"><ol><li><a href="index.html">Overview</a></li><li><a href="00-sveltekit.html">0 · An empty SvelteKit app</a></li><li><a href="01-feed-table.html" aria-current="page">1 · The live feed as a table</a></li><li><a href="02-maplibre.html">2 · Sensors on a map</a></li><li><a href="03-thresholds.html">3 · Thresholds and alerts</a></li><li><a href="04-live.html">4 · Live updates</a></li><li><a href="05-pages-layers.html">5 · Pages and layers</a></li><li><a href="06-charts.html">6 · Charts in the popup</a></li><li><a href="07-flood-layers.html">7 · Flood raster and vector</a></li><li><a href="08-flood-time.html">8 · The flood over time</a></li><li><a href="09-containers.html">9 · Containers</a></li><li><a href="api.html">The sensor API</a></li></ol></nav></aside>
+  <main>
+    <article>
+<h1 id="step-1--the-live-feed-as-a-table">Step 1 · The live feed as a table</h1>
+<p class="pager"><a href="00-sveltekit.html">← Step 0</a> · <a href="index.html">Guide overview</a> · <a href="02-maplibre.html">Step 2 →</a></p>
+<p><strong>You build:</strong> a page that asks the sensor API for every sensor and its latest reading, and shows them in a table with a <em>Refresh</em> button.
+<strong>You learn:</strong> connecting to an API through the dev server; Svelte's <code>$state</code>, <code>onMount</code>, <code>{#each}</code> and <code>{#if}</code>; showing times correctly.
+<strong>Time:</strong> about 45 minutes.
+<strong>Start from:</strong> your step 0, or the tag <code>step-0</code>.</p>
+<hr />
+<h2 id="11--start-the-api-and-look-at-it">1.1 · Start the API and look at it</h2>
+<p>In <strong>terminal 1</strong>, in the repository folder:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>python<span class="w"> </span>api/main.py
+</code></pre></div>
+<p>Open port <strong>8000</strong> and add <code>/docs</code> to the address. Try <strong><code>/sites</code></strong> and <strong><code>/live</code></strong> with <em>Try it out → Execute</em>. Read <a href="api.html">The sensor API</a>: you need the shape of these two answers in this step.</p>
+<p><strong>Answer for yourself before you go on:</strong> in <code>/live</code>, how old is TBM-01's reading? What does <code>age_s</code> mean?</p>
+<h2 id="12--let-the-dev-server-pass-api-on-to-the-api">1.2 · Let the dev server pass <code>/api</code> on to the API</h2>
+<p>Your page will ask for <code>/api/live</code>. Teach the dev server to pass everything that starts with <code>/api</code> on to port 8000 (see <a href="api.html#how-your-app-connects-to-it">How your app connects to it</a>).</p>
+<p>In <code>app/vite.config.js</code>, add a <code>server</code> block after <code>plugins: [ … ],</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="c1">// The browser asks this dev server for /api/…, and the dev server passes the</span>
+<span class="w">	</span><span class="c1">// request on to the sensor API. The browser only ever talks to one address.</span>
+<span class="w">	</span><span class="nx">server</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nx">proxy</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="s1">&#39;/api&#39;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">				</span><span class="nx">target</span><span class="o">:</span><span class="w"> </span><span class="nx">process</span><span class="p">.</span><span class="nx">env</span><span class="p">.</span><span class="nx">API_URL</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="s1">&#39;http://localhost:8000&#39;</span><span class="p">,</span>
+<span class="w">				</span><span class="nx">rewrite</span><span class="o">:</span><span class="w"> </span><span class="p">(</span><span class="nx">path</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">path</span><span class="p">.</span><span class="nx">replace</span><span class="p">(</span><span class="sr">/^\/api/</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="p">)</span>
+<span class="w">			</span><span class="p">}</span>
+<span class="w">		</span><span class="p">}</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p><code>rewrite</code> removes the <code>/api</code> again: <code>/api/live</code> arrives at the API as <code>/live</code>. <code>process.env.API_URL ?? …</code> means &quot;the address in <code>API_URL</code> if you set one, otherwise port 8000 on this machine&quot;.</p>
+<p><strong>Test it.</strong> In <strong>terminal 2</strong>:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="nb">cd</span><span class="w"> </span>app
+npm<span class="w"> </span>run<span class="w"> </span>dev
+</code></pre></div>
+<p>Open port 5173 and add <strong><code>/api/live</code></strong> to the address. You should see the API's JSON, served through your app's address. If you see <em>Not found</em>, check that the <code>server</code> block is inside <code>defineConfig({ … })</code>, and restart <code>npm run dev</code>: changes to <code>vite.config.js</code> need a restart.</p>
+<h2 id="13--fetch-the-data-when-the-page-opens">1.3 · Fetch the data when the page opens</h2>
+<p>Replace everything in <code>app/src/routes/+page.svelte</code> with a script that:</p>
+<ol>
+<li>keeps three pieces of <strong>state</strong>: <code>sites</code> (an empty list to start), <code>live</code> (<code>null</code> to start) and <code>error</code> (<code>null</code>);</li>
+<li>has an <code>async function load()</code> that fetches <code>/api/sites</code> and <code>/api/live</code>, and stores <code>sites</code> (the <code>sites</code> list from the first answer) and <code>live</code> (the whole second answer);</li>
+<li>runs <code>load()</code> once when the page opens.</li>
+</ol>
+<p>What you need:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">onMount</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;svelte&#39;</span><span class="p">;</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="nx">sites</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">([]);</span><span class="w">         </span><span class="c1">// $state: when this changes, the page updates</span>
+<span class="nx">onMount</span><span class="p">(</span><span class="nx">load</span><span class="p">);</span><span class="w">                  </span><span class="c1">// run load() once, after the page is on screen</span>
+
+<span class="kd">const</span><span class="w"> </span><span class="nx">res</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/sites&#39;</span><span class="p">);</span><span class="w">   </span><span class="c1">// ask</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">body</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">res</span><span class="p">.</span><span class="nx">json</span><span class="p">();</span><span class="w">           </span><span class="c1">// read the answer as JSON</span>
+</code></pre></div>
+<p>Two requests that don't depend on each other can run at the same time:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="nx">sitesRes</span><span class="p">,</span><span class="w"> </span><span class="nx">liveRes</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nb">Promise</span><span class="p">.</span><span class="nx">all</span><span class="p">([</span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/sites&#39;</span><span class="p">),</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/live&#39;</span><span class="p">)]);</span>
+</code></pre></div>
+<p><strong>Test it</strong> before you build the table: put <code>&lt;pre&gt;{JSON.stringify(live, null, 2)}&lt;/pre&gt;</code> under the script. Save: the page should show the JSON from <code>/live</code>.</p>
+<h2 id="14--show-a-table">1.4 · Show a table</h2>
+<p>Now replace the <code>&lt;pre&gt;</code> with a table: one row per site with <strong>Site</strong>, <strong>Type</strong>, <strong>Depth (m)</strong>, <strong>Measured</strong> and <strong>Age</strong>.</p>
+<p>The sites and the readings are in two different lists. Write a small helper that finds a site's reading:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="kd">function</span><span class="w"> </span><span class="nx">readingFor</span><span class="p">(</span><span class="nx">id</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="k">return</span><span class="w"> </span><span class="nx">live</span><span class="o">?</span><span class="p">.</span><span class="nx">readings</span><span class="p">.</span><span class="nx">find</span><span class="p">((</span><span class="nx">r</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">site</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">id</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><code>live?.readings</code> means &quot;<code>live.readings</code>, unless <code>live</code> is still <code>null</code>&quot;: the page is drawn once before the data arrives, and must not crash then.</p>
+<p>In the HTML, <code>{#each}</code> repeats a piece of HTML for every item in a list, and <code>{@const}</code> gives a value a name inside it:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">tbody</span><span class="p">&gt;</span>
+	{#each sites as site (site.id)}
+		{@const r = readingFor(site.id)}
+		<span class="p">&lt;</span><span class="nt">tr</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{site.id}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{site.type}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{r?.depth_m ?? &#39;–&#39;}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+			…
+		<span class="p">&lt;/</span><span class="nt">tr</span><span class="p">&gt;</span>
+	{/each}
+<span class="p">&lt;/</span><span class="nt">tbody</span><span class="p">&gt;</span>
+</code></pre></div>
+<p><code>(site.id)</code> is the <strong>key</strong>: it tells Svelte which row belongs to which site when the list changes. <code>?? '–'</code> shows a dash when there is no value (TBM-17 has never reported).</p>
+<h2 id="15--show-times-the-way-people-read-them">1.5 · Show times the way people read them</h2>
+<p>The API gives <code>time: 1794465329</code>. Nobody can read that. Write two helpers:</p>
+<ul>
+<li><code>showTime(seconds)</code>: the time in <strong>IST</strong> (Indian time), like <em>12 Nov, 14:35</em>.</li>
+<li><code>showAge(seconds)</code>: an age like <em>4 min</em>, <em>3 h</em> or <em>12 days</em>.</li>
+</ul>
+<p>JavaScript's <code>Date</code> counts in <strong>milliseconds</strong>, the API in <strong>seconds</strong>. Converting to a time zone is built in:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="ow">new</span><span class="w"> </span><span class="nb">Date</span><span class="p">(</span><span class="nx">seconds</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1000</span><span class="p">).</span><span class="nx">toLocaleString</span><span class="p">(</span><span class="s1">&#39;en-GB&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="nx">timeZone</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Asia/Kolkata&#39;</span><span class="p">,</span>
+<span class="w">	</span><span class="nx">day</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;2-digit&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">month</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;short&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">hour</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;2-digit&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">minute</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;2-digit&#39;</span>
+<span class="p">});</span>
+</code></pre></div>
+<p>Both helpers should return <code>'–'</code> for <code>null</code>.</p>
+<p><strong>Why keep UTC and convert only for display?</strong> Your computer, the server and the sensors can all be in different time zones. One time zone everywhere inside, local time only on screen, avoids a whole family of bugs.</p>
+<h2 id="16--refresh-and-say-when-the-api-is-down">1.6 · Refresh, and say when the API is down</h2>
+<ol>
+<li>
+<p>Above the table, show the replay's &quot;now&quot; (<code>live.time</code>) and a <strong>Refresh</strong> button that calls <code>load()</code> again:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">button</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{load}</span><span class="p">&gt;</span>Refresh<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+</code></pre></div>
+</li>
+<li>
+<p>Put the inside of <code>load()</code> in <code>try { … } catch (e) { … }</code>. When something fails, set <code>error</code> to a message a person understands, like <em>Could not reach the sensor API: … Is it running?</em> Also check <code>res.ok</code>: a server that answers <code>502</code> is not &quot;fine&quot;.</p>
+</li>
+<li>
+<p>Show the error above the table only when there is one:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>{#if error}
+	<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;error&quot;</span><span class="p">&gt;</span>{error}<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+{/if}
+</code></pre></div>
+</li>
+<li>
+<p>Give the page a title in the browser tab with <code>&lt;svelte:head&gt;&lt;title&gt;Flood twin · Tambaram&lt;/title&gt;&lt;/svelte:head&gt;</code>, and add some CSS in a <code>&lt;style&gt;</code> block so the table is readable.</p>
+</li>
+</ol>
+<h2 id="check">Check</h2>
+<ul>
+<li>[ ] The table shows 33 sensors with their type, depth, time and age.</li>
+<li>[ ] TBM-17 shows dashes, not <code>null</code> or <code>undefined</code>.</li>
+<li>[ ] Times are in IST. (The API's <code>/health</code> shows <code>now</code> in UTC seconds: is your page 5 h 30 min ahead of it?)</li>
+<li>[ ] <strong>Refresh</strong> shows a later sensor time (one real minute is one hour of data).</li>
+<li>[ ] Stop the API (Ctrl+C in terminal 1) and press <strong>Refresh</strong>: your error message appears. Start the API again, press <strong>Refresh</strong>: it's gone.</li>
+</ul>
+<p>Commit: <code>git add -A &amp;&amp; git commit -m &quot;My step 1: the feed as a table&quot;</code>.</p>
+<h2 id="stuck">Stuck?</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Try</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/api/live</code> gives <em>404 Not Found</em></td>
+<td>The proxy isn't active: is the <code>server</code> block inside <code>defineConfig</code>? Did you restart <code>npm run dev</code>?</td>
+</tr>
+<tr>
+<td><code>/api/live</code> gives <em>502</em> (<em>Bad Gateway</em>), terminal 2 says <code>ECONNREFUSED</code></td>
+<td>The API isn't running: start it in terminal 1</td>
+</tr>
+<tr>
+<td><code>Cannot read properties of null (reading 'readings')</code></td>
+<td>You used <code>live.readings</code> before the data arrived. Use <code>live?.readings</code></td>
+</tr>
+<tr>
+<td>The table is empty, no error</td>
+<td>Did you store <code>.sites</code> from the first answer, not the whole object? Use <code>console.log</code> and the browser's developer tools (F12 → <em>Console</em>)</td>
+</tr>
+<tr>
+<td>Times are 5 h 30 min off</td>
+<td>You forgot <code>* 1000</code>, or the <code>timeZone</code></td>
+</tr>
+</tbody>
+</table>
+<p>Compare: <code>git diff step-1 -- app/src app/vite.config.js</code>. Take over: see <a href="index.html#if-you-get-stuck">If you get stuck</a>.</p>
+<details>
+<summary>📄 <code>app/src/routes/+page.svelte</code> as it is at <code>step-1</code></summary>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">onMount</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;svelte&#39;</span><span class="p">;</span>
+
+<span class="w">	</span><span class="c1">// Step 1: ask the sensor API for the sites and their latest readings, and show them as a table.</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">sites</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">([]);</span><span class="w"> </span><span class="c1">// from /api/sites: where each sensor is</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">live</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span><span class="w"> </span><span class="c1">// from /api/live: the latest reading of each sensor</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">error</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span>
+
+<span class="w">	</span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">load</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nx">error</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="w">		</span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="nx">sitesRes</span><span class="p">,</span><span class="w"> </span><span class="nx">liveRes</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nb">Promise</span><span class="p">.</span><span class="nx">all</span><span class="p">([</span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/sites&#39;</span><span class="p">),</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/live&#39;</span><span class="p">)]);</span>
+<span class="w">			</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">sitesRes</span><span class="p">.</span><span class="nx">ok</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="o">!</span><span class="nx">liveRes</span><span class="p">.</span><span class="nx">ok</span><span class="p">)</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="ne">Error</span><span class="p">(</span><span class="sb">`API answered </span><span class="si">${</span><span class="nx">sitesRes</span><span class="p">.</span><span class="nx">status</span><span class="si">}</span><span class="sb"> / </span><span class="si">${</span><span class="nx">liveRes</span><span class="p">.</span><span class="nx">status</span><span class="si">}</span><span class="sb">`</span><span class="p">);</span>
+<span class="w">			</span><span class="nx">sites</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="k">await</span><span class="w"> </span><span class="nx">sitesRes</span><span class="p">.</span><span class="nx">json</span><span class="p">()).</span><span class="nx">sites</span><span class="p">;</span>
+<span class="w">			</span><span class="nx">live</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">liveRes</span><span class="p">.</span><span class="nx">json</span><span class="p">();</span>
+<span class="w">		</span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="nx">e</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="nx">error</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="sb">`Could not reach the sensor API: </span><span class="si">${</span><span class="nx">e</span><span class="p">.</span><span class="nx">message</span><span class="si">}</span><span class="sb">. Is it running?`</span><span class="p">;</span>
+<span class="w">		</span><span class="p">}</span>
+<span class="w">	</span><span class="p">}</span>
+
+<span class="w">	</span><span class="nx">onMount</span><span class="p">(</span><span class="nx">load</span><span class="p">);</span>
+
+<span class="w">	</span><span class="c1">// Times in the API are Unix seconds in UTC. Convert them only for display.</span>
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">showTime</span><span class="p">(</span><span class="nx">seconds</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">seconds</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="s1">&#39;–&#39;</span><span class="p">;</span>
+<span class="w">		</span><span class="k">return</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nb">Date</span><span class="p">(</span><span class="nx">seconds</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1000</span><span class="p">).</span><span class="nx">toLocaleString</span><span class="p">(</span><span class="s1">&#39;en-GB&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="nx">timeZone</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Asia/Kolkata&#39;</span><span class="p">,</span>
+<span class="w">			</span><span class="nx">day</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;2-digit&#39;</span><span class="p">,</span>
+<span class="w">			</span><span class="nx">month</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;short&#39;</span><span class="p">,</span>
+<span class="w">			</span><span class="nx">hour</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;2-digit&#39;</span><span class="p">,</span>
+<span class="w">			</span><span class="nx">minute</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;2-digit&#39;</span>
+<span class="w">		</span><span class="p">});</span>
+<span class="w">	</span><span class="p">}</span>
+
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">showAge</span><span class="p">(</span><span class="nx">seconds</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">seconds</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="s1">&#39;–&#39;</span><span class="p">;</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">seconds</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">3600</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nb">Math</span><span class="p">.</span><span class="nx">round</span><span class="p">(</span><span class="nx">seconds</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">60</span><span class="p">)</span><span class="si">}</span><span class="sb"> min`</span><span class="p">;</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">seconds</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">86400</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nb">Math</span><span class="p">.</span><span class="nx">round</span><span class="p">(</span><span class="nx">seconds</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">3600</span><span class="p">)</span><span class="si">}</span><span class="sb"> h`</span><span class="p">;</span>
+<span class="w">		</span><span class="k">return</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nb">Math</span><span class="p">.</span><span class="nx">round</span><span class="p">(</span><span class="nx">seconds</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">86400</span><span class="p">)</span><span class="si">}</span><span class="sb"> days`</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+
+<span class="w">	</span><span class="c1">// Look up a site&#39;s latest reading by its id.</span>
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">readingFor</span><span class="p">(</span><span class="nx">id</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">return</span><span class="w"> </span><span class="nx">live</span><span class="o">?</span><span class="p">.</span><span class="nx">readings</span><span class="p">.</span><span class="nx">find</span><span class="p">((</span><span class="nx">r</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">site</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">id</span><span class="p">);</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">svelte:head</span><span class="p">&gt;</span>
+	<span class="p">&lt;</span><span class="nt">title</span><span class="p">&gt;</span>Flood twin · Tambaram<span class="p">&lt;/</span><span class="nt">title</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">svelte:head</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">main</span><span class="p">&gt;</span>
+	<span class="p">&lt;</span><span class="nt">h1</span><span class="p">&gt;</span>Tambaram water levels<span class="p">&lt;/</span><span class="nt">h1</span><span class="p">&gt;</span>
+
+	<span class="p">&lt;</span><span class="nt">p</span><span class="p">&gt;</span>
+		Sensor time: <span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>{showTime(live?.time)} IST<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">button</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{load}</span><span class="p">&gt;</span>Refresh<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+	<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+
+	{#if error}
+		<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;error&quot;</span><span class="p">&gt;</span>{error}<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+	{/if}
+
+	<span class="p">&lt;</span><span class="nt">table</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">thead</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">tr</span><span class="p">&gt;&lt;</span><span class="nt">th</span><span class="p">&gt;</span>Site<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;&lt;</span><span class="nt">th</span><span class="p">&gt;</span>Type<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;&lt;</span><span class="nt">th</span><span class="p">&gt;</span>Depth (m)<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;&lt;</span><span class="nt">th</span><span class="p">&gt;</span>Measured<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;&lt;</span><span class="nt">th</span><span class="p">&gt;</span>Age<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;&lt;/</span><span class="nt">tr</span><span class="p">&gt;</span>
+		<span class="p">&lt;/</span><span class="nt">thead</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">tbody</span><span class="p">&gt;</span>
+			{#each sites as site (site.id)}
+				{@const r = readingFor(site.id)}
+				<span class="p">&lt;</span><span class="nt">tr</span><span class="p">&gt;</span>
+					<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{site.id}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+					<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{site.type}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+					<span class="p">&lt;</span><span class="nt">td</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;num&quot;</span><span class="p">&gt;</span>{r?.depth_m ?? &#39;–&#39;}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+					<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{showTime(r?.time)}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+					<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{showAge(r?.age_s)}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+				<span class="p">&lt;/</span><span class="nt">tr</span><span class="p">&gt;</span>
+			{/each}
+		<span class="p">&lt;/</span><span class="nt">tbody</span><span class="p">&gt;</span>
+	<span class="p">&lt;/</span><span class="nt">table</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">main</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">style</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="nt">main</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">font-family</span><span class="p">:</span><span class="w"> </span><span class="n">system-ui</span><span class="p">,</span><span class="w"> </span><span class="kc">sans-serif</span><span class="p">;</span>
+<span class="w">		</span><span class="k">max-width</span><span class="p">:</span><span class="w"> </span><span class="mi">46</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="kt">rem</span><span class="w"> </span><span class="kc">auto</span><span class="p">;</span>
+<span class="w">		</span><span class="k">padding</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="mi">1</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nt">table</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">border-collapse</span><span class="p">:</span><span class="w"> </span><span class="kc">collapse</span><span class="p">;</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="mi">100</span><span class="kt">%</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nt">th</span><span class="o">,</span>
+<span class="w">	</span><span class="nt">td</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">text-align</span><span class="p">:</span><span class="w"> </span><span class="kc">left</span><span class="p">;</span>
+<span class="w">		</span><span class="k">padding</span><span class="p">:</span><span class="w"> </span><span class="mf">0.3</span><span class="kt">rem</span><span class="w"> </span><span class="mf">0.6</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">border-bottom</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="kt">px</span><span class="w"> </span><span class="kc">solid</span><span class="w"> </span><span class="mh">#ddd</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">num</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">text-align</span><span class="p">:</span><span class="w"> </span><span class="kc">right</span><span class="p">;</span>
+<span class="w">		</span><span class="k">font-variant-numeric</span><span class="p">:</span><span class="w"> </span><span class="n">tabular-nums</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">error</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#b00020</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">style</span><span class="p">&gt;</span>
+</code></pre></div>
+</details>
+<details>
+<summary>📄 <code>app/vite.config.js</code> as it is at <code>step-1</code></summary>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">import</span><span class="w"> </span><span class="nx">adapter</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;@sveltejs/adapter-auto&#39;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">sveltekit</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;@sveltejs/kit/vite&#39;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">defineConfig</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;vite&#39;</span><span class="p">;</span>
+
+<span class="k">export</span><span class="w"> </span><span class="k">default</span><span class="w"> </span><span class="nx">defineConfig</span><span class="p">({</span>
+<span class="w">	</span><span class="nx">plugins</span><span class="o">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">		</span><span class="nx">sveltekit</span><span class="p">({</span>
+<span class="w">			</span><span class="nx">compilerOptions</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">				</span><span class="c1">// Force runes mode for the project, except for libraries. Can be removed in svelte 6.</span>
+<span class="w">				</span><span class="nx">runes</span><span class="o">:</span><span class="w"> </span><span class="p">({</span><span class="w"> </span><span class="nx">filename</span><span class="w"> </span><span class="p">})</span><span class="w"> </span><span class="p">=&gt;</span>
+<span class="w">					</span><span class="nx">filename</span><span class="p">.</span><span class="nx">split</span><span class="p">(</span><span class="sr">/[/\\]/</span><span class="p">).</span><span class="nx">includes</span><span class="p">(</span><span class="s1">&#39;node_modules&#39;</span><span class="p">)</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="kc">undefined</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">			</span><span class="p">},</span>
+
+<span class="w">			</span><span class="c1">// adapter-auto only supports some environments, see https://svelte.dev/docs/kit/adapter-auto for a list.</span>
+<span class="w">			</span><span class="c1">// If your environment is not supported, or you settled on a specific environment, switch out the adapter.</span>
+<span class="w">			</span><span class="c1">// See https://svelte.dev/docs/kit/adapters for more information about adapters.</span>
+<span class="w">			</span><span class="nx">adapter</span><span class="o">:</span><span class="w"> </span><span class="nx">adapter</span><span class="p">()</span>
+<span class="w">		</span><span class="p">})</span>
+<span class="w">	</span><span class="p">],</span>
+
+<span class="w">	</span><span class="c1">// Step 1: the browser asks this dev server for /api/…, and the dev server passes the</span>
+<span class="w">	</span><span class="c1">// request on to the sensor API. The browser only ever talks to one address.</span>
+<span class="w">	</span><span class="nx">server</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nx">proxy</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="s1">&#39;/api&#39;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">				</span><span class="nx">target</span><span class="o">:</span><span class="w"> </span><span class="nx">process</span><span class="p">.</span><span class="nx">env</span><span class="p">.</span><span class="nx">API_URL</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="s1">&#39;http://localhost:8000&#39;</span><span class="p">,</span>
+<span class="w">				</span><span class="nx">rewrite</span><span class="o">:</span><span class="w"> </span><span class="p">(</span><span class="nx">path</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">path</span><span class="p">.</span><span class="nx">replace</span><span class="p">(</span><span class="sr">/^\/api/</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="p">)</span>
+<span class="w">			</span><span class="p">}</span>
+<span class="w">		</span><span class="p">}</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">});</span>
+</code></pre></div>
+</details>
+<p><strong>Why it was done this way, and questions to think about:</strong> <a href="https://github.com/AlpinistPanda/flood-twin-lab/blob/main/STEPS.md#step-1--fetch-the-live-sensor-feed--step-1">STEPS.md, step 1</a>.</p>
+<hr />
+<h2 id="walkthrough-step-1-in-small-pieces-with-all-the-code">Walkthrough: step 1 in small pieces, with all the code</h2>
+<p>Two terminals for this whole step: <strong>terminal 1</strong> runs the API, <strong>terminal 2</strong> runs <code>npm run dev</code> in <code>app/</code>.</p>
+<h3 id="1a--the-api-is-alive">1.A · The API is alive</h3>
+<p>Terminal 1, in the repository folder:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>python<span class="w"> </span>api/main.py
+</code></pre></div>
+<p><strong>You see:</strong> <code>Uvicorn running on http://0.0.0.0:8000</code>. In a third terminal (or open port 8000 in the browser and add <code>/live</code>):</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>curl<span class="w"> </span>-s<span class="w"> </span>localhost:8000/live<span class="w"> </span><span class="p">|</span><span class="w"> </span>head<span class="w"> </span>-c<span class="w"> </span><span class="m">300</span>
+</code></pre></div>
+<p><strong>You see:</strong> <code>{&quot;time&quot;:…,&quot;readings&quot;:[{&quot;site&quot;:&quot;TBM-01&quot;,…</code>. The API works on its own, before your app is involved.</p>
+<h3 id="1b--the-proxy">1.B · The proxy</h3>
+<p>Replace <strong>all of</strong> <code>app/vite.config.js</code> with:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">import</span><span class="w"> </span><span class="nx">adapter</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;@sveltejs/adapter-auto&#39;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">sveltekit</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;@sveltejs/kit/vite&#39;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">defineConfig</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;vite&#39;</span><span class="p">;</span>
+
+<span class="k">export</span><span class="w"> </span><span class="k">default</span><span class="w"> </span><span class="nx">defineConfig</span><span class="p">({</span>
+<span class="w">	</span><span class="nx">plugins</span><span class="o">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">		</span><span class="nx">sveltekit</span><span class="p">({</span>
+<span class="w">			</span><span class="nx">compilerOptions</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">				</span><span class="c1">// Force runes mode for the project, except for libraries. Can be removed in svelte 6.</span>
+<span class="w">				</span><span class="nx">runes</span><span class="o">:</span><span class="w"> </span><span class="p">({</span><span class="w"> </span><span class="nx">filename</span><span class="w"> </span><span class="p">})</span><span class="w"> </span><span class="p">=&gt;</span>
+<span class="w">					</span><span class="nx">filename</span><span class="p">.</span><span class="nx">split</span><span class="p">(</span><span class="sr">/[/\\]/</span><span class="p">).</span><span class="nx">includes</span><span class="p">(</span><span class="s1">&#39;node_modules&#39;</span><span class="p">)</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="kc">undefined</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">			</span><span class="p">},</span>
+<span class="w">			</span><span class="nx">adapter</span><span class="o">:</span><span class="w"> </span><span class="nx">adapter</span><span class="p">()</span>
+<span class="w">		</span><span class="p">})</span>
+<span class="w">	</span><span class="p">],</span>
+
+<span class="w">	</span><span class="c1">// The browser asks this dev server for /api/…, and the dev server passes the</span>
+<span class="w">	</span><span class="c1">// request on to the sensor API. The browser only ever talks to one address.</span>
+<span class="w">	</span><span class="nx">server</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nx">proxy</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="s1">&#39;/api&#39;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">				</span><span class="nx">target</span><span class="o">:</span><span class="w"> </span><span class="nx">process</span><span class="p">.</span><span class="nx">env</span><span class="p">.</span><span class="nx">API_URL</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="s1">&#39;http://localhost:8000&#39;</span><span class="p">,</span>
+<span class="w">				</span><span class="nx">rewrite</span><span class="o">:</span><span class="w"> </span><span class="p">(</span><span class="nx">path</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">path</span><span class="p">.</span><span class="nx">replace</span><span class="p">(</span><span class="sr">/^\/api/</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="p">)</span>
+<span class="w">			</span><span class="p">}</span>
+<span class="w">		</span><span class="p">}</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">});</span>
+</code></pre></div>
+<p>Restart the dev server in terminal 2 (Ctrl+C, then <code>npm run dev</code>): it reads this file only when it starts.</p>
+<p><strong>You see:</strong> open port 5173 with <code>/api/live</code> added to the address: the same JSON as in 1.A, now through <strong>your app's</strong> address.</p>
+<h3 id="1c--fetch-on-a-button-press">1.C · Fetch on a button press</h3>
+<p>Replace everything in <code>app/src/routes/+page.svelte</code> with:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">live</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span>
+
+<span class="w">	</span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">load</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="nx">res</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/live&#39;</span><span class="p">);</span>
+<span class="w">		</span><span class="nx">live</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">res</span><span class="p">.</span><span class="nx">json</span><span class="p">();</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">h1</span><span class="p">&gt;</span>Tambaram water levels<span class="p">&lt;/</span><span class="nt">h1</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">button</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{load}</span><span class="p">&gt;</span>Load<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">pre</span><span class="p">&gt;</span>{JSON.stringify(live, null, 2)}<span class="p">&lt;/</span><span class="nt">pre</span><span class="p">&gt;</span>
+</code></pre></div>
+<p><strong>You see:</strong> <code>null</code>. Press <strong>Load</strong>: the whole answer of <code>/api/live</code>, nicely indented. Press again: the <code>time</code> at the top has moved on.</p>
+<h3 id="1d--fetch-when-the-page-opens">1.D · Fetch when the page opens</h3>
+<p>Nobody wants to press <em>Load</em> first. Add <code>onMount</code>, which runs once when the page is on screen:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">onMount</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;svelte&#39;</span><span class="p">;</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">live</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span>
+
+<span class="w">	</span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">load</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="nx">res</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/live&#39;</span><span class="p">);</span>
+<span class="w">		</span><span class="nx">live</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">res</span><span class="p">.</span><span class="nx">json</span><span class="p">();</span>
+<span class="w">	</span><span class="p">}</span>
+
+<span class="w">	</span><span class="nx">onMount</span><span class="p">(</span><span class="nx">load</span><span class="p">);</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">h1</span><span class="p">&gt;</span>Tambaram water levels<span class="p">&lt;/</span><span class="nt">h1</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">button</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{load}</span><span class="p">&gt;</span>Refresh<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">pre</span><span class="p">&gt;</span>{JSON.stringify(live, null, 2)}<span class="p">&lt;/</span><span class="nt">pre</span><span class="p">&gt;</span>
+</code></pre></div>
+<p><strong>You see:</strong> the JSON appears straight away when you reload the page.</p>
+<h3 id="1e--sites-too-both-at-once">1.E · Sites too, both at once</h3>
+<p><code>/live</code> has depths but no sensor types or locations; those are in <code>/sites</code>. Fetch both at the same time with <code>Promise.all</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">sites</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">([]);</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">live</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span>
+
+<span class="w">	</span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">load</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="nx">sitesRes</span><span class="p">,</span><span class="w"> </span><span class="nx">liveRes</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nb">Promise</span><span class="p">.</span><span class="nx">all</span><span class="p">([</span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/sites&#39;</span><span class="p">),</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/live&#39;</span><span class="p">)]);</span>
+<span class="w">		</span><span class="nx">sites</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="k">await</span><span class="w"> </span><span class="nx">sitesRes</span><span class="p">.</span><span class="nx">json</span><span class="p">()).</span><span class="nx">sites</span><span class="p">;</span>
+<span class="w">		</span><span class="nx">live</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">liveRes</span><span class="p">.</span><span class="nx">json</span><span class="p">();</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p>Change the <code>&lt;pre&gt;</code> to <code>&lt;pre&gt;{JSON.stringify(sites[0], null, 2)}&lt;/pre&gt;</code> for a moment.</p>
+<p><strong>You see:</strong> the first site: <code>TBM-01</code>, its <code>type</code>, <code>lat</code>, <code>lon</code>, <code>sensor_height_m</code>.</p>
+<h3 id="1f--the-first-table">1.F · The first table</h3>
+<p>Replace the <code>&lt;pre&gt;</code> with a table. Start with only two columns:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">table</span><span class="p">&gt;</span>
+	<span class="p">&lt;</span><span class="nt">thead</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">tr</span><span class="p">&gt;&lt;</span><span class="nt">th</span><span class="p">&gt;</span>Site<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;&lt;</span><span class="nt">th</span><span class="p">&gt;</span>Type<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;&lt;/</span><span class="nt">tr</span><span class="p">&gt;</span>
+	<span class="p">&lt;/</span><span class="nt">thead</span><span class="p">&gt;</span>
+	<span class="p">&lt;</span><span class="nt">tbody</span><span class="p">&gt;</span>
+		{#each sites as site (site.id)}
+			<span class="p">&lt;</span><span class="nt">tr</span><span class="p">&gt;</span>
+				<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{site.id}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+				<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{site.type}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+			<span class="p">&lt;/</span><span class="nt">tr</span><span class="p">&gt;</span>
+		{/each}
+	<span class="p">&lt;/</span><span class="nt">tbody</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">table</span><span class="p">&gt;</span>
+</code></pre></div>
+<p><strong>You see:</strong> 33 rows, <em>TBM-01 street</em> to <em>TBM-33 …</em>.</p>
+<h3 id="1g--the-depth-of-each-site">1.G · The depth of each site</h3>
+<p>Add a helper in the script, after <code>load</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="c1">// Look up a site&#39;s latest reading by its id.</span>
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">readingFor</span><span class="p">(</span><span class="nx">id</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">return</span><span class="w"> </span><span class="nx">live</span><span class="o">?</span><span class="p">.</span><span class="nx">readings</span><span class="p">.</span><span class="nx">find</span><span class="p">((</span><span class="nx">r</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">site</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">id</span><span class="p">);</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p>and a third column. <code>{@const}</code> gives the reading a name inside the loop:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>		{#each sites as site (site.id)}
+			{@const r = readingFor(site.id)}
+			<span class="p">&lt;</span><span class="nt">tr</span><span class="p">&gt;</span>
+				<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{site.id}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+				<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{site.type}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+				<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{r?.depth_m ?? &#39;–&#39;}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+			<span class="p">&lt;/</span><span class="nt">tr</span><span class="p">&gt;</span>
+		{/each}
+</code></pre></div>
+<p>Add <code>&lt;th&gt;Depth (m)&lt;/th&gt;</code> to the header row.</p>
+<p><strong>You see:</strong> depths like <code>0.01</code>, <code>-0.02</code>, <code>-7.49</code>, and a dash for TBM-17, which never reported.</p>
+<h3 id="1h--times-people-can-read">1.H · Times people can read</h3>
+<p>Add these two helpers to the script:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="c1">// Times in the API are Unix seconds in UTC. Convert them only for display.</span>
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">showTime</span><span class="p">(</span><span class="nx">seconds</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">seconds</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="s1">&#39;–&#39;</span><span class="p">;</span>
+<span class="w">		</span><span class="k">return</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nb">Date</span><span class="p">(</span><span class="nx">seconds</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1000</span><span class="p">).</span><span class="nx">toLocaleString</span><span class="p">(</span><span class="s1">&#39;en-GB&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="nx">timeZone</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Asia/Kolkata&#39;</span><span class="p">,</span>
+<span class="w">			</span><span class="nx">day</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;2-digit&#39;</span><span class="p">,</span>
+<span class="w">			</span><span class="nx">month</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;short&#39;</span><span class="p">,</span>
+<span class="w">			</span><span class="nx">hour</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;2-digit&#39;</span><span class="p">,</span>
+<span class="w">			</span><span class="nx">minute</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;2-digit&#39;</span>
+<span class="w">		</span><span class="p">});</span>
+<span class="w">	</span><span class="p">}</span>
+
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">showAge</span><span class="p">(</span><span class="nx">seconds</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">seconds</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="s1">&#39;–&#39;</span><span class="p">;</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">seconds</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">3600</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nb">Math</span><span class="p">.</span><span class="nx">round</span><span class="p">(</span><span class="nx">seconds</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">60</span><span class="p">)</span><span class="si">}</span><span class="sb"> min`</span><span class="p">;</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">seconds</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">86400</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nb">Math</span><span class="p">.</span><span class="nx">round</span><span class="p">(</span><span class="nx">seconds</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">3600</span><span class="p">)</span><span class="si">}</span><span class="sb"> h`</span><span class="p">;</span>
+<span class="w">		</span><span class="k">return</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nb">Math</span><span class="p">.</span><span class="nx">round</span><span class="p">(</span><span class="nx">seconds</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">86400</span><span class="p">)</span><span class="si">}</span><span class="sb"> days`</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p>Two more columns, <strong>Measured</strong> and <strong>Age</strong>:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>				<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{showTime(r?.time)}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+				<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{showAge(r?.age_s)}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+</code></pre></div>
+<p>And above the table, the replay's &quot;now&quot;:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">p</span><span class="p">&gt;</span>
+	Sensor time: <span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>{showTime(live?.time)} IST<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span>
+	<span class="p">&lt;</span><span class="nt">button</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{load}</span><span class="p">&gt;</span>Refresh<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+</code></pre></div>
+<p>(Remove the old <em>Refresh</em> button under the heading.)</p>
+<p><strong>You see:</strong> <em>Sensor time: 04 Nov, 08:35 IST</em>, and TBM-01 measured <em>12 days</em> ago.</p>
+<h3 id="1i--when-the-api-is-down">1.I · When the API is down</h3>
+<p>Stop the API (Ctrl+C in terminal 1) and press <strong>Refresh</strong>. Nothing happens on the page; the browser's console (F12) shows a red error. Make it visible. Add <code>let error = $state(null);</code> and wrap the inside of <code>load</code> in <code>try … catch</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">load</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nx">error</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="w">		</span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="nx">sitesRes</span><span class="p">,</span><span class="w"> </span><span class="nx">liveRes</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nb">Promise</span><span class="p">.</span><span class="nx">all</span><span class="p">([</span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/sites&#39;</span><span class="p">),</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/live&#39;</span><span class="p">)]);</span>
+<span class="w">			</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">sitesRes</span><span class="p">.</span><span class="nx">ok</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="o">!</span><span class="nx">liveRes</span><span class="p">.</span><span class="nx">ok</span><span class="p">)</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="ne">Error</span><span class="p">(</span><span class="sb">`API answered </span><span class="si">${</span><span class="nx">sitesRes</span><span class="p">.</span><span class="nx">status</span><span class="si">}</span><span class="sb"> / </span><span class="si">${</span><span class="nx">liveRes</span><span class="p">.</span><span class="nx">status</span><span class="si">}</span><span class="sb">`</span><span class="p">);</span>
+<span class="w">			</span><span class="nx">sites</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="k">await</span><span class="w"> </span><span class="nx">sitesRes</span><span class="p">.</span><span class="nx">json</span><span class="p">()).</span><span class="nx">sites</span><span class="p">;</span>
+<span class="w">			</span><span class="nx">live</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">liveRes</span><span class="p">.</span><span class="nx">json</span><span class="p">();</span>
+<span class="w">		</span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="nx">e</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="nx">error</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="sb">`Could not reach the sensor API: </span><span class="si">${</span><span class="nx">e</span><span class="p">.</span><span class="nx">message</span><span class="si">}</span><span class="sb">. Is it running?`</span><span class="p">;</span>
+<span class="w">		</span><span class="p">}</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p>and show it, above the table:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>{#if error}
+	<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;error&quot;</span><span class="p">&gt;</span>{error}<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+{/if}
+</code></pre></div>
+<p><strong>You see:</strong> with the API stopped, <em>Could not reach the sensor API: API answered 502 / 502. Is it running?</em> (the dev server answers 502, <em>Bad Gateway</em>, when it can't reach the API). Start the API again and press <strong>Refresh</strong>: the message disappears.</p>
+<h3 id="1j--a-title-and-some-style">1.J · A title and some style</h3>
+<p>Add, under the script:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">svelte:head</span><span class="p">&gt;</span>
+	<span class="p">&lt;</span><span class="nt">title</span><span class="p">&gt;</span>Flood twin · Tambaram<span class="p">&lt;/</span><span class="nt">title</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">svelte:head</span><span class="p">&gt;</span>
+</code></pre></div>
+<p>Wrap everything except the script, <code>&lt;svelte:head&gt;</code> and <code>&lt;style&gt;</code> in <code>&lt;main&gt;…&lt;/main&gt;</code>, and add at the end:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">style</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="nt">main</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">font-family</span><span class="p">:</span><span class="w"> </span><span class="n">system-ui</span><span class="p">,</span><span class="w"> </span><span class="kc">sans-serif</span><span class="p">;</span>
+<span class="w">		</span><span class="k">max-width</span><span class="p">:</span><span class="w"> </span><span class="mi">46</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="kt">rem</span><span class="w"> </span><span class="kc">auto</span><span class="p">;</span>
+<span class="w">		</span><span class="k">padding</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="mi">1</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nt">table</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">border-collapse</span><span class="p">:</span><span class="w"> </span><span class="kc">collapse</span><span class="p">;</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="mi">100</span><span class="kt">%</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nt">th</span><span class="o">,</span>
+<span class="w">	</span><span class="nt">td</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">text-align</span><span class="p">:</span><span class="w"> </span><span class="kc">left</span><span class="p">;</span>
+<span class="w">		</span><span class="k">padding</span><span class="p">:</span><span class="w"> </span><span class="mf">0.3</span><span class="kt">rem</span><span class="w"> </span><span class="mf">0.6</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">border-bottom</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="kt">px</span><span class="w"> </span><span class="kc">solid</span><span class="w"> </span><span class="mh">#ddd</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">error</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#b00020</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">style</span><span class="p">&gt;</span>
+</code></pre></div>
+<p><strong>You see:</strong> a readable table, and <em>Flood twin · Tambaram</em> in the browser tab. Your page is now the same as the reference at the end of the step above. Commit.</p>
+<hr />
+<p><a href="02-maplibre.html">Step 2 · Sensors on a map →</a></p>
+
+    </article>
+    <nav class="next" aria-label="Previous and next"><a class="prev" href="00-sveltekit.html"><span>Previous</span>0 · An empty SvelteKit app</a><a class="nxt" href="02-maplibre.html"><span>Next</span>2 · Sensors on a map</a></nav>
+  </main>
+  <nav class="toc" aria-label="On this page"><p>On this page</p><ol><li><a href="#11--start-the-api-and-look-at-it">1.1 · Start the API and look at it</a></li><li><a href="#12--let-the-dev-server-pass-api-on-to-the-api">1.2 · Let the dev server pass /api on to the API</a></li><li><a href="#13--fetch-the-data-when-the-page-opens">1.3 · Fetch the data when the page opens</a></li><li><a href="#14--show-a-table">1.4 · Show a table</a></li><li><a href="#15--show-times-the-way-people-read-them">1.5 · Show times the way people read them</a></li><li><a href="#16--refresh-and-say-when-the-api-is-down">1.6 · Refresh, and say when the API is down</a></li><li><a href="#check">Check</a></li><li><a href="#stuck">Stuck?</a></li><li><a href="#walkthrough-step-1-in-small-pieces-with-all-the-code">Walkthrough: step 1 in small pieces, with all the code</a></li></ol></nav>
+</div>
+<script src="assets/guide.js"></script>
+</body>
+</html>

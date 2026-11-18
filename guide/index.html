@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Build the flood twin yourself · Flood twin build guide</title>
+<link rel="stylesheet" href="assets/guide.css">
+<script>try{const t=localStorage.getItem('guide-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header class="top">
+  <button class="menu" type="button" aria-label="Show steps" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">Flood twin <span>build guide</span></a>
+  <a class="repo" href="https://github.com/AlpinistPanda/flood-twin-lab">GitHub</a>
+  <button class="theme" type="button" aria-label="Switch light or dark">◐</button>
+</header>
+<div class="layout">
+  <aside class="side"><nav aria-label="Steps"><ol><li><a href="index.html" aria-current="page">Overview</a></li><li><a href="00-sveltekit.html">0 · An empty SvelteKit app</a></li><li><a href="01-feed-table.html">1 · The live feed as a table</a></li><li><a href="02-maplibre.html">2 · Sensors on a map</a></li><li><a href="03-thresholds.html">3 · Thresholds and alerts</a></li><li><a href="04-live.html">4 · Live updates</a></li><li><a href="05-pages-layers.html">5 · Pages and layers</a></li><li><a href="06-charts.html">6 · Charts in the popup</a></li><li><a href="07-flood-layers.html">7 · Flood raster and vector</a></li><li><a href="08-flood-time.html">8 · The flood over time</a></li><li><a href="09-containers.html">9 · Containers</a></li><li><a href="api.html">The sensor API</a></li></ol></nav></aside>
+  <main>
+    <article>
+<h1 id="build-the-flood-twin-yourself">Build the flood twin yourself</h1>
+<p>In the lab you <strong>run and change</strong> a finished flood twin. This guide is for when you want to <strong>build it yourself</strong>, from an empty folder to the whole twin running in containers, in ten steps.</p>
+<p>You build the <strong>web app</strong>. The <strong>sensor API</strong> (the service that delivers the water levels) is given: in a real project it belongs to someone else, such as the city or a sensor company, and you connect to it. <a href="api.html">The sensor API</a> describes what it offers and how to connect to it.</p>
+<p>Every step ends where one of the repository's git tags (<code>step-0</code> … <code>step-9</code>) ends. Try each step on your own first. If you get stuck, compare your code with that tag, or take it over and carry on from there. See <a href="#if-you-get-stuck"><em>If you get stuck</em></a> below.</p>
+<h2 id="the-steps">The steps</h2>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>You build</th>
+<th>You learn</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="00-sveltekit.html">0 · An empty SvelteKit app</a></td>
+<td>A new web app, running in your browser</td>
+<td>Creating a SvelteKit project, its files, the dev server</td>
+<td>20 min</td>
+</tr>
+<tr>
+<td><a href="01-feed-table.html">1 · The live feed as a table</a></td>
+<td>A page that asks the API for the latest readings</td>
+<td>Svelte 5 basics: <code>$state</code>, <code>{#each}</code>, <code>fetch</code>; the dev-server proxy</td>
+<td>45 min</td>
+</tr>
+<tr>
+<td><a href="02-maplibre.html">2 · Sensors on a map</a></td>
+<td>A MapLibre GL map with a dot per sensor</td>
+<td>GeoJSON, sources and layers, popups, components</td>
+<td>60 min</td>
+</tr>
+<tr>
+<td><a href="03-thresholds.html">3 · Thresholds and alerts</a></td>
+<td>Coloured levels, an alert banner, hysteresis</td>
+<td>Turning numbers into decisions; <code>$derived</code></td>
+<td>60 min</td>
+</tr>
+<tr>
+<td><a href="04-live.html">4 · Live updates</a></td>
+<td>Automatic polling and a <em>Feed lost</em> warning</td>
+<td>Timers, timeouts, a small state machine</td>
+<td>45 min</td>
+</tr>
+<tr>
+<td><a href="05-pages-layers.html">5 · Pages and layers</a></td>
+<td>A map page, a table page, a layer panel</td>
+<td>Routing, layouts, shared state in <code>.svelte.js</code> files</td>
+<td>90 min</td>
+</tr>
+<tr>
+<td><a href="06-charts.html">6 · Charts in the popup</a></td>
+<td>A Day and a Month chart for every sensor</td>
+<td>Drawing charts in SVG; loading data on demand</td>
+<td>75 min</td>
+</tr>
+<tr>
+<td><a href="07-flood-layers.html">7 · A flood model: raster and vector</a></td>
+<td>A flood-depth raster and exposed buildings</td>
+<td>Cloud-Optimized GeoTIFFs, colour functions, layer order</td>
+<td>75 min</td>
+</tr>
+<tr>
+<td><a href="08-flood-time.html">8 · The flood over time</a></td>
+<td>A time slider for 119 hourly flood maps</td>
+<td>Multi-band rasters, exclusive layer groups</td>
+<td>75 min</td>
+</tr>
+<tr>
+<td><a href="09-containers.html">9 · Containers</a></td>
+<td>Dockerfiles and a Compose file for the whole twin</td>
+<td>Production builds, nginx, Docker Compose, a load test</td>
+<td>75 min</td>
+</tr>
+</tbody>
+</table>
+<p>About <strong>ten hours</strong> in total if everything goes well. Spread it over a few evenings: each step ends with something that works.</p>
+<p>The explanations of <em>why</em> (design choices, things to try, questions to discuss) are in <a href="https://github.com/AlpinistPanda/flood-twin-lab/blob/main/STEPS.md">STEPS.md</a>. This guide is about <em>how</em>: what to type, in which file, in which order.</p>
+<h2 id="before-you-start">Before you start</h2>
+<p><strong>What you should know:</strong> a little HTML and JavaScript (variables, functions, arrays, objects). You don't need to know Svelte or MapLibre: the guide explains what you need when you need it.</p>
+<p><strong>Where you work:</strong> in a <strong>GitHub Codespace</strong> (nothing to install), or on your own laptop.</p>
+<h3 id="a--in-a-github-codespace-recommended">A · In a GitHub Codespace (recommended)</h3>
+<ol>
+<li>Open the repository on GitHub: <strong>https://github.com/AlpinistPanda/flood-twin-lab</strong></li>
+<li>Switch the branch from <code>main</code> to <strong><code>start</code></strong> (the branch menu above the file list).</li>
+<li><strong>Code → Codespaces → Create codespace on start.</strong></li>
+</ol>
+<p>The <code>start</code> branch has everything <strong>except the web app</strong>: the sensor data, the sensor API, the load test, and this guide. The <code>app/</code> folder doesn't exist yet: you create it in step 0.</p>
+<p>A free GitHub account includes 120 core hours of Codespaces a month: about 60 hours on the smallest (2-core) machine. Stop the Codespace when you take a break (<em>github.com/codespaces → ⋯ → Stop codespace</em>); it also stops by itself after 30 minutes of inactivity. Your files are kept.</p>
+<h3 id="b--on-your-own-laptop">B · On your own laptop</h3>
+<p>You need <strong>Git</strong>, <strong>conda</strong> (<a href="https://conda-forge.org/download/">Miniforge</a>) and, for step 9, <strong>Docker Desktop</strong>. Then:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>git<span class="w"> </span>clone<span class="w"> </span>--branch<span class="w"> </span>start<span class="w"> </span>https://github.com/AlpinistPanda/flood-twin-lab.git
+<span class="nb">cd</span><span class="w"> </span>flood-twin-lab
+conda<span class="w"> </span>env<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>environment.yml
+conda<span class="w"> </span>activate<span class="w"> </span>flood-twin
+</code></pre></div>
+<p>The <code>flood-twin</code> environment has Python 3.15 (for the API) and Node.js 26 (for the web app). Run <code>conda activate flood-twin</code> in every new terminal.</p>
+<h3 id="save-your-work-after-every-step">Save your work after every step</h3>
+<p>Git is your safety net. At the end of every step, in the repository folder:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>git<span class="w"> </span>add<span class="w"> </span>-A
+git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;My step 2: sensors on a map&quot;</span>
+</code></pre></div>
+<p>In a Codespace you can't push to the course repository. If you want to keep your work on GitHub, the Codespace offers to create a <strong>fork</strong> (your own copy) the first time you push.</p>
+<h2 id="two-terminals">Two terminals</h2>
+<p>From step 1 on, the twin runs in two terminals side by side:</p>
+<table>
+<thead>
+<tr>
+<th>Terminal</th>
+<th>Folder</th>
+<th>Runs</th>
+<th>Port</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 · the sensor API</td>
+<td>the repository folder</td>
+<td><code>python api/main.py</code></td>
+<td>8000</td>
+</tr>
+<tr>
+<td>2 · the web app</td>
+<td><code>app/</code></td>
+<td><code>npm run dev</code></td>
+<td>5173</td>
+</tr>
+</tbody>
+</table>
+<p>In a Codespace, click <strong>+</strong> in the terminal panel for a second terminal. Open a port with the pop-up, or from the <strong>Ports</strong> tab (right-click → <em>Open in Browser</em>). On a laptop, open <code>http://localhost:5173</code>.</p>
+<h2 id="if-you-get-stuck">If you get stuck</h2>
+<p>Each step has a <strong>Stuck?</strong> section at the end. There are three ways out, from small to large. All commands run in the <strong>repository folder</strong> (not in <code>app/</code>).</p>
+<p><strong>1 · Look at the reference.</strong> Each step shows the reference files at the end, folded. Or print one in the terminal:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>git<span class="w"> </span>show<span class="w"> </span>step-3:app/src/lib/sensors.js
+</code></pre></div>
+<p><strong>2 · Compare your code with the reference.</strong> Lines with <code>-</code> are in the reference, lines with <code>+</code> are yours:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>git<span class="w"> </span>diff<span class="w"> </span>step-3<span class="w"> </span>--<span class="w"> </span>app/src
+</code></pre></div>
+<p><strong>3 · Take over the reference and carry on.</strong> This replaces your <code>app/</code> with the reference version of that step. Commit your own attempt first if you want to keep it.</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>git<span class="w"> </span>add<span class="w"> </span>-A<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;My attempt at step 3&quot;</span><span class="w">   </span><span class="c1"># optional: keep your attempt</span>
+rm<span class="w"> </span>-rf<span class="w"> </span>app/src<span class="w">                                       </span><span class="c1"># remove your source files</span>
+git<span class="w"> </span>checkout<span class="w"> </span>step-3<span class="w"> </span>--<span class="w"> </span>app<span class="w">                           </span><span class="c1"># take the reference app of step 3</span>
+<span class="nb">cd</span><span class="w"> </span>app<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>install<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">cd</span><span class="w"> </span>..<span class="w">                       </span><span class="c1"># install its packages</span>
+</code></pre></div>
+<p>You can also take over a single file: <code>git checkout step-3 -- app/src/lib/sensors.js</code>.</p>
+<p>The reference code has comments that start with <em>Step 3:</em> and so on. They are there to explain, not something you have to copy.</p>
+<h2 id="the-versions-we-use">The versions we use</h2>
+<p>The guide was tested with these versions. Newer versions usually work, but not always the same way; if something behaves differently from the guide, install the exact version.</p>
+<table>
+<thead>
+<tr>
+<th>What</th>
+<th>Version</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Node.js / npm</td>
+<td>26 / 12</td>
+</tr>
+<tr>
+<td>Python</td>
+<td>3.15</td>
+</tr>
+<tr>
+<td><code>sv</code> (creates the SvelteKit project)</td>
+<td>1.3.0</td>
+</tr>
+<tr>
+<td>SvelteKit / Svelte / Vite</td>
+<td>3.2 / 5.57 / 8.3</td>
+</tr>
+<tr>
+<td>MapLibre GL JS</td>
+<td>6.18.0</td>
+</tr>
+<tr>
+<td><code>@geomatico/maplibre-cog-protocol</code></td>
+<td>0.10.0</td>
+</tr>
+<tr>
+<td><code>@sveltejs/adapter-static</code></td>
+<td>4.0.1</td>
+</tr>
+</tbody>
+</table>
+
+    </article>
+    <nav class="next" aria-label="Previous and next"><span></span><a class="nxt" href="00-sveltekit.html"><span>Next</span>0 · An empty SvelteKit app</a></nav>
+  </main>
+  <nav class="toc" aria-label="On this page"><p>On this page</p><ol><li><a href="#the-steps">The steps</a></li><li><a href="#before-you-start">Before you start</a></li><li><a href="#two-terminals">Two terminals</a></li><li><a href="#if-you-get-stuck">If you get stuck</a></li><li><a href="#the-versions-we-use">The versions we use</a></li></ol></nav>
+</div>
+<script src="assets/guide.js"></script>
+</body>
+</html>

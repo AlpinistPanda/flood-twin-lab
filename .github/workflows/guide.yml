@@ -1,0 +1,30 @@
+# Publishes the HTML build guide (guide/) to GitHub Pages:
+# https://alpinistpanda.github.io/flood-twin-lab/
+# One-time setup: Settings → Pages → Build and deployment → Source: GitHub Actions.
+name: Publish build guide
+on:
+  push:
+    branches: [main]
+    paths: ["guide/**", ".github/workflows/guide.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: guide
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,1078 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 8 · The flood over time · Flood twin build guide</title>
+<link rel="stylesheet" href="assets/guide.css">
+<script>try{const t=localStorage.getItem('guide-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header class="top">
+  <button class="menu" type="button" aria-label="Show steps" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">Flood twin <span>build guide</span></a>
+  <a class="repo" href="https://github.com/AlpinistPanda/flood-twin-lab">GitHub</a>
+  <button class="theme" type="button" aria-label="Switch light or dark">◐</button>
+</header>
+<div class="layout">
+  <aside class="side"><nav aria-label="Steps"><ol><li><a href="index.html">Overview</a></li><li><a href="00-sveltekit.html">0 · An empty SvelteKit app</a></li><li><a href="01-feed-table.html">1 · The live feed as a table</a></li><li><a href="02-maplibre.html">2 · Sensors on a map</a></li><li><a href="03-thresholds.html">3 · Thresholds and alerts</a></li><li><a href="04-live.html">4 · Live updates</a></li><li><a href="05-pages-layers.html">5 · Pages and layers</a></li><li><a href="06-charts.html">6 · Charts in the popup</a></li><li><a href="07-flood-layers.html">7 · Flood raster and vector</a></li><li><a href="08-flood-time.html" aria-current="page">8 · The flood over time</a></li><li><a href="09-containers.html">9 · Containers</a></li><li><a href="api.html">The sensor API</a></li></ol></nav></aside>
+  <main>
+    <article>
+<h1 id="step-8--the-flood-over-time">Step 8 · The flood over time</h1>
+<p class="pager"><a href="07-flood-layers.html">← Step 7</a> · <a href="index.html">Guide overview</a> · <a href="09-containers.html">Step 9 →</a></p>
+<p><strong>You build:</strong> a second flood layer, the depth <strong>at every hour</strong> of the 100-year flood (119 hourly maps in one file), with a <strong>time bar</strong> along the bottom of the map: a slider from <em>Time 0:00</em> to <em>Time 118:00</em>, a ▶ button, and the wet area through the event. The two flood layers become <strong>one choice</strong>: <em>None</em>, <em>Maximum depth</em> or <em>Over time</em>.
+<strong>You learn:</strong> multi-band rasters; storing values as integers with a scale factor; redrawing a raster with other data; radio buttons for exclusive layers.
+<strong>Time:</strong> about 75 minutes.
+<strong>Start from:</strong> your step 7, or the tag <code>step-7</code>. You already copied the two files for this step in step 7.</p>
+<hr />
+<h2 id="the-data">The data</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>What</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>depth_timeseries_100yr.tif</code></td>
+<td>A COG with <strong>119 bands</strong>, one per hour: band 1 is <em>Time 0:00</em>, band 119 is <em>Time 118:00</em>. 16.9 MB</td>
+</tr>
+<tr>
+<td><code>depth_timeseries_100yr.json</code></td>
+<td>Which model step each band is, the minutes between steps, and the wet area per step</td>
+</tr>
+</tbody>
+</table>
+<div class="code" data-lang="json"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;file&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;depth_timeseries_100yr.tif&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;unit&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;cm&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;nodata&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">65535</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;steps&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="err">…</span><span class="p">,</span><span class="w"> </span><span class="mi">118</span><span class="p">],</span>
+<span class="w">  </span><span class="nt">&quot;minutes_per_step&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">60</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;wet_km2&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">2.48</span><span class="p">,</span><span class="w"> </span><span class="mf">2.77</span><span class="p">,</span><span class="w"> </span><span class="mf">2.83</span><span class="p">,</span><span class="w"> </span><span class="err">…</span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>Centimetres, not metres.</strong> The max-depth file stores metres as decimal numbers (32 bits per cell). This one stores <strong>whole centimetres</strong> as 16-bit integers, like the RHT platform: four times smaller, and nothing is lost, because the depths were already rounded to the centimetre. <code>65535</code>, the largest 16-bit number, means <em>no data or dry</em>. The file also carries a <strong>scale factor</strong> of 0.01, so QGIS shows metres.</p>
+<p><em>Store centimetres, compute in metres.</em> You'll meet both in the code: your colour function gets the <strong>raw</strong> centimetres; the plugin's <code>locationValues()</code> applies the scale factor and gives you metres.</p>
+<h2 id="81--one-layer-per-time-step-no-one-layer-redrawn">8.1 · One layer per time step? No: one layer, redrawn</h2>
+<p>You could add 119 raster layers and show one at a time. That's 119 sources and a lot of memory. Instead there is <strong>one</strong> layer, and the colour function draws whichever band is chosen:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">TIMESERIES_URL</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nx">location</span><span class="p">.</span><span class="nx">origin</span><span class="si">}</span><span class="sb">/layers/depth_timeseries_100yr.tif`</span><span class="p">;</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">NODATA_CM</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">65535</span><span class="p">;</span>
+<span class="kd">let</span><span class="w"> </span><span class="nx">shownBand</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0</span><span class="p">;</span>
+
+<span class="kd">const</span><span class="w"> </span><span class="nx">colourDepthAtStep</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">pixel</span><span class="p">,</span><span class="w"> </span><span class="nx">colour</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">cm</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">pixel</span><span class="p">[</span><span class="nx">shownBand</span><span class="p">];</span><span class="w">       </span><span class="c1">// pixel has one value per band: 119 of them</span>
+<span class="w">	</span><span class="nx">paint</span><span class="p">(</span><span class="nx">cm</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">NODATA_CM</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="kc">NaN</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">cm</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">100</span><span class="p">,</span><span class="w"> </span><span class="nx">colour</span><span class="p">);</span>
+<span class="p">};</span>
+</code></pre></div>
+<p>In <code>scenario.js</code>:</p>
+<ol>
+<li>
+<p><strong>Split</strong> your step 7 colour function in two: <code>paint(depth, colour)</code> that colours one depth in metres, and the max-depth version, which calls it: <code>const colourDepth = ([depth], colour) =&gt; paint(depth, colour);</code>. Both rasters now share one set of colours and one legend.</p>
+</li>
+<li>
+<p><strong>Register</strong> both colour functions in one <code>registerOnce()</code> function, and call it from <code>addFloodDepth</code> and from the new <code>addFloodTimeseries</code>.</p>
+</li>
+<li>
+<p><strong><code>addFloodTimeseries(map, band, beforeId)</code></strong>: like <code>addFloodDepth</code>, with source and layer id <code>flood-time</code>, and <code>'raster-fade-duration': 0</code> in <code>paint</code> (otherwise every time step fades in slowly). It sets <code>shownBand = band</code> first.</p>
+</li>
+<li>
+<p><strong><code>showFloodStep(map, band, beforeId)</code></strong>: to show another band, <strong>remove</strong> the layer and its source, and <strong>add them again</strong> with the new band. MapLibre then asks for the tiles again, and the plugin colours them with the new <code>shownBand</code>. The plugin keeps the bytes it already downloaded, so this costs no new download. Keep the layer's visibility as it was.</p>
+</li>
+<li>
+<p><strong><code>timeseriesInfo()</code></strong>: fetch the JSON <strong>once</strong> and remember the promise, so every caller gets the same answer:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="kd">let</span><span class="w"> </span><span class="nx">meta</span><span class="p">;</span>
+<span class="k">export</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">timeseriesInfo</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="nx">meta</span><span class="w"> </span><span class="o">??=</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/layers/depth_timeseries_100yr.json&#39;</span><span class="p">).</span><span class="nx">then</span><span class="p">((</span><span class="nx">r</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">json</span><span class="p">());</span>
+<span class="w">	</span><span class="k">return</span><span class="w"> </span><span class="nx">meta</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+</li>
+<li>
+<p><strong><code>floodDepthAtStep(lngLat)</code></strong>: like <code>floodDepthAt</code>, but <code>locationValues</code> now returns 119 values; take <code>values[shownBand]</code>. These are already metres.</p>
+</li>
+</ol>
+<h2 id="82--two-flood-layers-one-choice">8.2 · Two flood layers, one choice</h2>
+<p>Showing the maximum depth and the depth at 14:00 on top of each other makes no sense: two blue rasters, one legend. They form a <strong>group</strong>: one of them, or none.</p>
+<p>In <code>layers.svelte.js</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">GROUPS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">flood</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Flood depth, 100-year flood&#39;</span><span class="w"> </span><span class="p">};</span>
+
+<span class="c1">// in layers:</span>
+<span class="nx">flood</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Max flood depth, 100-year flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visible</span><span class="o">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nx">legend</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;depth&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">group</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">option</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Maximum depth&#39;</span><span class="w"> </span><span class="p">},</span>
+<span class="nx">floodTime</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Flood depth over time, 100-year flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visible</span><span class="o">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nx">legend</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;depth&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">group</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">option</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Over time&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">band</span><span class="o">:</span><span class="w"> </span><span class="mf">0</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p><code>band</code> is the time step on the slider. Because it lives in the shared layers state, the map and the time bar can both read and change it.</p>
+<p>In <code>LayerPanel.svelte</code>, draw a layer that has a <code>group</code> differently: <strong>once per group</strong> (at its first member), as a <code>&lt;fieldset&gt;</code> with the group's title, a radio button <em>None</em>, and a radio button per member (its <code>option</code>), then <strong>one</strong> depth legend if any member is on. Helpers make it short:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="kd">const</span><span class="w"> </span><span class="nx">members</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">group</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nb">Object</span><span class="p">.</span><span class="nx">entries</span><span class="p">(</span><span class="nx">layers</span><span class="p">).</span><span class="nx">filter</span><span class="p">(([,</span><span class="w"> </span><span class="nx">l</span><span class="p">])</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">l</span><span class="p">.</span><span class="nx">group</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">group</span><span class="p">);</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">chosen</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">group</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">members</span><span class="p">(</span><span class="nx">group</span><span class="p">).</span><span class="nx">find</span><span class="p">(([,</span><span class="w"> </span><span class="nx">l</span><span class="p">])</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">l</span><span class="p">.</span><span class="nx">visible</span><span class="p">)</span><span class="o">?</span><span class="p">.[</span><span class="mf">0</span><span class="p">]</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="kd">function</span><span class="w"> </span><span class="nx">choose</span><span class="p">(</span><span class="nx">group</span><span class="p">,</span><span class="w"> </span><span class="nx">id</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="nx">key</span><span class="p">,</span><span class="w"> </span><span class="nx">l</span><span class="p">]</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">members</span><span class="p">(</span><span class="nx">group</span><span class="p">))</span><span class="w"> </span><span class="nx">l</span><span class="p">.</span><span class="nx">visible</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">key</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">id</span><span class="p">;</span><span class="w"> </span><span class="c1">// on for the chosen one, off for the rest</span>
+<span class="p">}</span>
+</code></pre></div>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&quot;radio&quot;</span> <span class="na">checked</span><span class="o">=</span><span class="s">{member.visible}</span> <span class="na">onchange</span><span class="o">=</span><span class="s">{()</span> <span class="err">=</span><span class="p">&gt;</span> choose(layer.group, key)} /&gt;
+</code></pre></div>
+<p>Layers without a group keep their checkbox.</p>
+<h2 id="83--the-time-bar-appsrclibfloodtimebarsvelte">8.3 · The time bar: <code>app/src/lib/FloodTimeBar.svelte</code></h2>
+<p>A white bar floating at the bottom centre of the map (<code>position: absolute; bottom: 34px; left: 50%; transform: translateX(-50%)</code>), shown only while <em>Over time</em> is chosen. It works directly on <code>layers.floodTime</code>.</p>
+<ol>
+<li>
+<p><strong>Load the info</strong> with <code>timeseriesInfo()</code>, and draw nothing until it has arrived.</p>
+</li>
+<li>
+<p><strong>The slider</strong>, from band 0 to the last band:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&quot;range&quot;</span> <span class="na">min</span><span class="o">=</span><span class="s">&quot;0&quot;</span> <span class="na">max</span><span class="o">=</span><span class="s">{last}</span> <span class="na">step</span><span class="o">=</span><span class="s">&quot;1&quot;</span> <span class="na">bind:value</span><span class="o">=</span><span class="s">{layer.band}</span> <span class="p">/&gt;</span>
+</code></pre></div>
+</li>
+<li>
+<p><strong>The time</strong> above it: <em>Time 59:00</em>. From the band: <code>info.steps[band] * info.minutes_per_step</code> minutes; write hours and minutes as <code>H:MM</code>.</p>
+</li>
+<li>
+<p><strong>The wet area</strong> at this time, from <code>info.wet_km2[band]</code>: <em>3.41 km² wet</em>.</p>
+</li>
+<li>
+<p><strong>▶ / ❚❚</strong>: play one hour every 250 ms (the whole event in about 30 seconds) with <code>setInterval</code>; stop at the end; at the end, ▶ starts again from 0. Stop playing when the user drags the slider, and when the bar disappears (<code>onDestroy</code>).</p>
+</li>
+<li>
+<p><strong>Ticks and labels</strong> under the slider: a tick per hour, a longer one every 12 hours with its label (<em>0:00, 12:00, 24:00, …</em>). Place them in percent of the width: <code>(i / last) * 100</code>.</p>
+</li>
+<li>
+<p><strong>Optional:</strong> above the slider, the wet area through the event as a small filled SVG chart, with a line at the current time. You can see at a glance when the flood peaks.</p>
+</li>
+</ol>
+<p>Put the bar on the map page, in <code>routes/maplibre/+page.svelte</code>, inside <code>MapPage</code>:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>{#if layers.floodTime.visible}
+	<span class="p">&lt;</span><span class="nt">FloodTimeBar</span> <span class="p">/&gt;</span>
+{/if}
+</code></pre></div>
+<h2 id="84--the-map-follows-the-slider">8.4 · The map follows the slider</h2>
+<p>In <code>MapLibreMap.svelte</code>, one more <code>$effect</code>. It reads <code>layers.floodTime.visible</code> and <code>layers.floodTime.band</code>, so it runs every time either changes:</p>
+<ul>
+<li>If the layer is on and doesn't exist yet: <code>addFloodTimeseries(map, band, below)</code>, where <code>below</code> is the buildings layer if it exists, otherwise the first label layer (as in step 7).</li>
+<li>If it exists: <code>showFloodStep(map, band, below)</code>, and set its visibility.</li>
+</ul>
+<p>In the click handler: if <em>Over time</em> is on, show the depth at <strong>this time step</strong> with <code>floodDepthAtStep</code>, and the time (<em>100-year scenario, Time 59:00</em>). Check <code>floodTime</code> before <code>flood</code>.</p>
+<h2 id="check">Check</h2>
+<ul>
+<li>[ ] The Layers box has a <em>Flood depth</em> group with <em>None</em>, <em>Maximum depth</em>, <em>Over time</em>. Only one can be on.</li>
+<li>[ ] <em>Over time</em>: the time bar appears at the bottom, at <em>Time 0:00</em>, and a little water is on the map.</li>
+<li>[ ] Drag the slider: the water changes; the time and the wet area follow.</li>
+<li>[ ] ▶: the flood plays in about 30 seconds and stops at <em>Time 118:00</em>. Around <em>Time 59:00</em> the most is wet.</li>
+<li>[ ] Click the water: the depth <strong>at the time on the slider</strong>. Compare with <em>Maximum depth</em> at the same spot: never more.</li>
+<li>[ ] Back to <em>Maximum depth</em> or <em>None</em>: the time bar disappears.</li>
+<li>[ ] <strong>Network</strong> tab: while you drag, almost no new requests (the plugin reuses what it has).</li>
+</ul>
+<p>Commit your work.</p>
+<h2 id="stuck">Stuck?</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Try</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The time series is all dark blue, or all empty</td>
+<td>You colour centimetres as if they were metres (84 instead of 0.84), or <code>65535</code> gets a colour. Convert in the colour function</td>
+</tr>
+<tr>
+<td>The click says 84 m</td>
+<td><code>locationValues</code> already gives metres: don't divide by 100 there, only in the colour function</td>
+</tr>
+<tr>
+<td>The slider moves but the map doesn't change</td>
+<td>The effect doesn't read <code>layers.floodTime.band</code>, or <code>showFloodStep</code> returns early because <code>shownBand</code> was already set</td>
+</tr>
+<tr>
+<td>Each step fades in slowly</td>
+<td><code>'raster-fade-duration': 0</code> in the layer's <code>paint</code></td>
+</tr>
+<tr>
+<td><em>Maximum depth</em> and <em>Over time</em> both on</td>
+<td><code>choose()</code> must switch the others <strong>off</strong></td>
+</tr>
+<tr>
+<td>Error after switching steps: <em>layer already exists</em></td>
+<td>Remove the layer <strong>before</strong> the source, then add both again</td>
+</tr>
+</tbody>
+</table>
+<p>Compare: <code>git diff step-8 -- app/src</code>.</p>
+<details>
+<summary>🔍 What changed in <code>app/src/lib/scenario.js</code> from <code>step-7</code> to <code>step-8</code></summary>
+<div class="code" data-lang="diff"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="gd">--- a/app/src/lib/scenario.js</span>
+<span class="gi">+++ b/app/src/lib/scenario.js</span>
+<span class="gu">@@ -8,4 +8,11 @@</span>
+<span class="w"> </span>// Both are plain files in app/static/layers/, served by the web server like an image.
+<span class="w"> </span>// No tile server, no database: the browser reads only the parts it needs.
+<span class="gi">+//</span>
+<span class="gi">+// Step 8: a third file, the flood OVER TIME:</span>
+<span class="gi">+//</span>
+<span class="gi">+//   depth_timeseries_100yr.tif  RASTER with one band per time step (30 of them). Stored like the</span>
+<span class="gi">+//                               RHT platform does: whole centimetres as 16-bit integers, 65535 =</span>
+<span class="gi">+//                               no data. Four times smaller than decimal metres.</span>
+<span class="gi">+//   depth_timeseries_100yr.json Which model step each band is, and the wet area per step.</span>
+<span class="w"> </span>
+<span class="w"> </span>import * as maplibregl from &#39;maplibre-gl&#39;;
+<span class="gu">@@ -15,4 +22,6 @@ import { waterLevel, LEVELS } from &#39;#lib/sensors.js&#39;;</span>
+<span class="w"> </span>export const FLOOD_URL = `${location.origin}/layers/max_depth_100yr.tif`;
+<span class="w"> </span>export const BUILDINGS_URL = &#39;/layers/buildings_exposure.geojson&#39;;
+<span class="gi">+export const TIMESERIES_URL = `${location.origin}/layers/depth_timeseries_100yr.tif`;</span>
+<span class="gi">+const TIMESERIES_META_URL = &#39;/layers/depth_timeseries_100yr.json&#39;;</span>
+<span class="w"> </span>
+<span class="w"> </span>// Depth classes for the raster, light to dark blue. [from (m), colour]
+<span class="gu">@@ -27,6 +36,6 @@ export const DEPTH_CLASSES = [</span>
+<span class="w"> </span>const RGB = DEPTH_CLASSES.map(([from, hex]) =&gt; [from, [1, 3, 5].map((i) =&gt; parseInt(hex.slice(i, i + 2), 16))]);
+<span class="w"> </span>
+<span class="gd">-// Called for EVERY pixel of every tile, so keep it simple and fast.</span>
+<span class="gd">-function colourDepth([depth], colour) {</span>
+<span class="gi">+// One depth (m) → one colour. Called for EVERY pixel of every tile, so keep it simple and fast.</span>
+<span class="gi">+function paint(depth, colour) {</span>
+<span class="w"> </span>	if (!(depth &gt;= DEPTH_CLASSES[0][0])) return colour.set([0, 0, 0, 0]); // dry, or no data (NaN): transparent
+<span class="w"> </span>	let rgb = RGB[0][1];
+<span class="gu">@@ -35,14 +44,28 @@ function colourDepth([depth], colour) {</span>
+<span class="w"> </span>}
+<span class="w"> </span>
+<span class="gi">+// The max-depth file holds metres, one band.</span>
+<span class="gi">+const colourDepth = ([depth], colour) =&gt; paint(depth, colour);</span>
+<span class="gi">+</span>
+<span class="gi">+// The time series holds centimetres, one band per time step. Which band to show is `shownBand`.</span>
+<span class="gi">+const NODATA_CM = 65535;</span>
+<span class="gi">+let shownBand = 0;</span>
+<span class="gi">+const colourDepthAtStep = (pixel, colour) =&gt; {</span>
+<span class="gi">+	const cm = pixel[shownBand];</span>
+<span class="gi">+	paint(cm === NODATA_CM ? NaN : cm / 100, colour); // we store centimetres, we compute in metres</span>
+<span class="gi">+};</span>
+<span class="gi">+</span>
+<span class="w"> </span>let registered = false;
+<span class="gi">+function registerOnce() {</span>
+<span class="gi">+	if (registered) return;</span>
+<span class="gi">+	maplibregl.addProtocol(&#39;cog&#39;, cogProtocol); // once per page</span>
+<span class="gi">+	setColorFunction(FLOOD_URL, colourDepth);</span>
+<span class="gi">+	setColorFunction(TIMESERIES_URL, colourDepthAtStep);</span>
+<span class="gi">+	registered = true;</span>
+<span class="gi">+}</span>
+<span class="w"> </span>
+<span class="w"> </span>// The raster. `cog://` tells MapLibre to hand the URL to the COG plugin, which reads the
+<span class="w"> </span>// GeoTIFF in the browser with HTTP range requests and turns it into map tiles.
+<span class="w"> </span>export function addFloodDepth(map, beforeId) {
+<span class="gd">-	if (!registered) {</span>
+<span class="gd">-		maplibregl.addProtocol(&#39;cog&#39;, cogProtocol); // once per page</span>
+<span class="gd">-		setColorFunction(FLOOD_URL, colourDepth);</span>
+<span class="gd">-		registered = true;</span>
+<span class="gd">-	}</span>
+<span class="gi">+	registerOnce();</span>
+<span class="w"> </span>	map.addSource(&#39;flood&#39;, { type: &#39;raster&#39;, url: `cog://${FLOOD_URL}`, tileSize: 256 });
+<span class="w"> </span>	map.addLayer({ id: &#39;flood-depth&#39;, type: &#39;raster&#39;, source: &#39;flood&#39;, paint: { &#39;raster-opacity&#39;: 0.8 } }, beforeId);
+<span class="gu">@@ -57,4 +80,50 @@ export async function floodDepthAt(lngLat) {</span>
+<span class="w"> </span>}
+<span class="w"> </span>
+<span class="gi">+// ── Step 8: the flood over time ──────────────────────────────────────────────</span>
+<span class="gi">+</span>
+<span class="gi">+// Which model step each band holds, and the wet area per step. Loaded once.</span>
+<span class="gi">+let meta;</span>
+<span class="gi">+export async function timeseriesInfo() {</span>
+<span class="gi">+	meta ??= fetch(TIMESERIES_META_URL).then((r) =&gt; r.json());</span>
+<span class="gi">+	return meta;</span>
+<span class="gi">+}</span>
+<span class="gi">+</span>
+<span class="gi">+// Show time step `band` (0 = the first band). The colours are made when MapLibre asks the plugin</span>
+<span class="gi">+// for a tile, so to show another step we remove the layer and its source and add them again:</span>
+<span class="gi">+// MapLibre asks for the tiles again, and the plugin colours them with the new band. The plugin</span>
+<span class="gi">+// keeps the bytes it has already downloaded, so changing the step costs no new download here.</span>
+<span class="gi">+export function addFloodTimeseries(map, band, beforeId) {</span>
+<span class="gi">+	registerOnce();</span>
+<span class="gi">+	shownBand = band;</span>
+<span class="gi">+	map.addSource(&#39;flood-time&#39;, { type: &#39;raster&#39;, url: `cog://${TIMESERIES_URL}`, tileSize: 256 });</span>
+<span class="gi">+	map.addLayer(</span>
+<span class="gi">+		{</span>
+<span class="gi">+			id: &#39;flood-time&#39;,</span>
+<span class="gi">+			type: &#39;raster&#39;,</span>
+<span class="gi">+			source: &#39;flood-time&#39;,</span>
+<span class="gi">+			paint: { &#39;raster-opacity&#39;: 0.8, &#39;raster-fade-duration&#39;: 0 }</span>
+<span class="gi">+		},</span>
+<span class="gi">+		beforeId</span>
+<span class="gi">+	);</span>
+<span class="gi">+}</span>
+<span class="gi">+</span>
+<span class="gi">+export function showFloodStep(map, band, beforeId) {</span>
+<span class="gi">+	if (band === shownBand || !map.getLayer(&#39;flood-time&#39;)) return;</span>
+<span class="gi">+	const visibility = map.getLayoutProperty(&#39;flood-time&#39;, &#39;visibility&#39;);</span>
+<span class="gi">+	map.removeLayer(&#39;flood-time&#39;);</span>
+<span class="gi">+	map.removeSource(&#39;flood-time&#39;);</span>
+<span class="gi">+	addFloodTimeseries(map, band, beforeId);</span>
+<span class="gi">+	map.setLayoutProperty(&#39;flood-time&#39;, &#39;visibility&#39;, visibility ?? &#39;visible&#39;);</span>
+<span class="gi">+}</span>
+<span class="gi">+</span>
+<span class="gi">+// The depth at one place at the shown time step, in metres (null: dry or no data).</span>
+<span class="gi">+// Unlike the colour function above, locationValues() applies the file&#39;s scale factor for us:</span>
+<span class="gi">+// it returns metres (0.84), not centimetres (84), and NaN where the file says &quot;no data&quot;.</span>
+<span class="gi">+export async function floodDepthAtStep(lngLat) {</span>
+<span class="gi">+	const values = await locationValues(TIMESERIES_URL, { latitude: lngLat.lat, longitude: lngLat.lng }, 16);</span>
+<span class="gi">+	const depth = values[shownBand];</span>
+<span class="gi">+	return Number.isFinite(depth) &amp;&amp; depth &gt;= DEPTH_CLASSES[0][0] ? depth : null;</span>
+<span class="gi">+}</span>
+<span class="gi">+</span>
+<span class="w"> </span>// The vector layer: building outlines, coloured with the SAME thresholds as the sensors (step 3).
+<span class="w"> </span>export function addBuildings(map, beforeId) {
+</code></pre></div>
+</details>
+<details>
+<summary>🔍 What changed in <code>app/src/lib/layers.svelte.js</code> from <code>step-7</code> to <code>step-8</code></summary>
+<div class="code" data-lang="diff"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="gd">--- a/app/src/lib/layers.svelte.js</span>
+<span class="gi">+++ b/app/src/lib/layers.svelte.js</span>
+<span class="gu">@@ -9,8 +9,16 @@</span>
+<span class="w"> </span>// Step 7: two layers from a flood scenario. They start switched off, and their data is only
+<span class="w"> </span>// downloaded the first time you switch them on. Drawn on the MapLibre page only.
+<span class="gi">+//</span>
+<span class="gi">+// Step 8: the flood over time. `band` is the time step on the slider (0 = the first one).</span>
+<span class="gi">+// The two flood layers form a GROUP: you see one of them, or none. Both on at once would put two</span>
+<span class="gi">+// blue rasters on top of each other, with one legend for both.</span>
+<span class="gi">+</span>
+<span class="gi">+// The groups, and the title they get in the layer panel.</span>
+<span class="gi">+export const GROUPS = { flood: &#39;Flood depth, 100-year flood&#39; };</span>
+<span class="w"> </span>
+<span class="w"> </span>export const layers = $state({
+<span class="w"> </span>	sensors: { label: &#39;Water-level sensors (live)&#39;, visible: true, legend: &#39;levels&#39; },
+<span class="w"> </span>	buildings: { label: &#39;Buildings exposed, 100-year flood&#39;, visible: false, legend: &#39;exposure&#39; },
+<span class="gd">-	flood: { label: &#39;Max flood depth, 100-year flood&#39;, visible: false, legend: &#39;depth&#39; }</span>
+<span class="gi">+	flood: { label: &#39;Max flood depth, 100-year flood&#39;, visible: false, legend: &#39;depth&#39;, group: &#39;flood&#39;, option: &#39;Maximum depth&#39; },</span>
+<span class="gi">+	floodTime: { label: &#39;Flood depth over time, 100-year flood&#39;, visible: false, legend: &#39;depth&#39;, group: &#39;flood&#39;, option: &#39;Over time&#39;, band: 0 }</span>
+<span class="w"> </span>});
+</code></pre></div>
+</details>
+<details>
+<summary>🔍 What changed in <code>app/src/lib/LayerPanel.svelte</code> from <code>step-7</code> to <code>step-8</code></summary>
+<div class="code" data-lang="diff"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="gd">--- a/app/src/lib/LayerPanel.svelte</span>
+<span class="gi">+++ b/app/src/lib/LayerPanel.svelte</span>
+<span class="gu">@@ -1,4 +1,4 @@</span>
+<span class="w"> </span>&lt;script&gt;
+<span class="gd">-	import { layers } from &#39;#lib/layers.svelte.js&#39;;</span>
+<span class="gi">+	import { layers, GROUPS } from &#39;#lib/layers.svelte.js&#39;;</span>
+<span class="w"> </span>	import { LEVELS } from &#39;#lib/sensors.js&#39;;
+<span class="w"> </span>	import { DEPTH_CLASSES } from &#39;#lib/scenario.js&#39;;
+<span class="gu">@@ -8,4 +8,12 @@</span>
+<span class="w"> </span>	let { supported = Object.keys(layers) } = $props();
+<span class="w"> </span>	let open = $state(true);
+<span class="gi">+</span>
+<span class="gi">+	// Step 8: layers in a group are shown as one choice (radio buttons): one of them, or none.</span>
+<span class="gi">+	const members = (group) =&gt; Object.entries(layers).filter(([, l]) =&gt; l.group === group);</span>
+<span class="gi">+	const firstOf = (group) =&gt; members(group)[0][0];</span>
+<span class="gi">+	const chosen = (group) =&gt; members(group).find(([, l]) =&gt; l.visible)?.[0] ?? null;</span>
+<span class="gi">+	function choose(group, id) {</span>
+<span class="gi">+		for (const [key, l] of members(group)) l.visible = key === id;</span>
+<span class="gi">+	}</span>
+<span class="w"> </span>&lt;/script&gt;
+<span class="w"> </span>
+<span class="gu">@@ -18,4 +26,32 @@</span>
+<span class="w"> </span>		{#each Object.entries(layers) as [id, layer] (id)}
+<span class="w"> </span>			{@const ok = supported.includes(id)}
+<span class="gi">+			{#if layer.group}</span>
+<span class="gi">+				&lt;!-- A group: drawn once, at its first member, as radio buttons plus one legend --&gt;</span>
+<span class="gi">+				{#if id === firstOf(layer.group)}</span>
+<span class="gi">+					&lt;fieldset&gt;</span>
+<span class="gi">+						&lt;legend&gt;{GROUPS[layer.group]}&lt;/legend&gt;</span>
+<span class="gi">+						&lt;label&gt;</span>
+<span class="gi">+							&lt;input type=&quot;radio&quot; checked={!chosen(layer.group)} onchange={() =&gt; choose(layer.group, null)} /&gt;</span>
+<span class="gi">+							None</span>
+<span class="gi">+						&lt;/label&gt;</span>
+<span class="gi">+						{#each members(layer.group) as [key, member] (key)}</span>
+<span class="gi">+							{@const can = supported.includes(key)}</span>
+<span class="gi">+							&lt;label class:off={!can} title={can ? &#39;&#39; : &#39;Only on the MapLibre page&#39;}&gt;</span>
+<span class="gi">+								&lt;input type=&quot;radio&quot; checked={member.visible} disabled={!can} onchange={() =&gt; choose(layer.group, key)} /&gt;</span>
+<span class="gi">+								{member.option}</span>
+<span class="gi">+							&lt;/label&gt;</span>
+<span class="gi">+						{/each}</span>
+<span class="gi">+					&lt;/fieldset&gt;</span>
+<span class="gi">+					{#if chosen(layer.group)}</span>
+<span class="gi">+						&lt;ul class=&quot;legend&quot;&gt;</span>
+<span class="gi">+							{#each DEPTH_CLASSES as [from, colour], i (from)}</span>
+<span class="gi">+								&lt;li&gt;</span>
+<span class="gi">+									&lt;i class=&quot;sq&quot; style:background={colour}&gt;&lt;/i&gt;{from}{i &lt; DEPTH_CLASSES.length - 1 ? ` – ${DEPTH_CLASSES[i + 1][0]}` : &#39; and more&#39;} m</span>
+<span class="gi">+								&lt;/li&gt;</span>
+<span class="gi">+							{/each}</span>
+<span class="gi">+						&lt;/ul&gt;</span>
+<span class="gi">+					{/if}</span>
+<span class="gi">+				{/if}</span>
+<span class="gi">+			{:else}</span>
+<span class="w"> </span>			&lt;label class:off={!ok} title={ok ? &#39;&#39; : &#39;Only on the MapLibre page&#39;}&gt;
+<span class="w"> </span>				&lt;input type=&quot;checkbox&quot; bind:checked={layer.visible} disabled={!ok} /&gt;
+<span class="gu">@@ -34,12 +70,5 @@</span>
+<span class="w"> </span>					&lt;li&gt;&lt;i class=&quot;sq&quot; style:background={LEVELS.danger.colour}&gt;&lt;/i&gt;0.50 m and more&lt;/li&gt;
+<span class="w"> </span>				&lt;/ul&gt;
+<span class="gd">-			{:else if ok &amp;&amp; layer.visible &amp;&amp; layer.legend === &#39;depth&#39;}</span>
+<span class="gd">-				&lt;ul class=&quot;legend&quot;&gt;</span>
+<span class="gd">-					{#each DEPTH_CLASSES as [from, colour], i (from)}</span>
+<span class="gd">-						&lt;li&gt;</span>
+<span class="gd">-							&lt;i class=&quot;sq&quot; style:background={colour}&gt;&lt;/i&gt;{from}{i &lt; DEPTH_CLASSES.length - 1 ? ` – ${DEPTH_CLASSES[i + 1][0]}` : &#39; and more&#39;} m</span>
+<span class="gd">-						&lt;/li&gt;</span>
+<span class="gd">-					{/each}</span>
+<span class="gd">-				&lt;/ul&gt;</span>
+<span class="gi">+			{/if}</span>
+<span class="w"> </span>			{/if}
+<span class="w"> </span>		{/each}
+<span class="gu">@@ -79,4 +108,16 @@</span>
+<span class="w"> </span>		font-size: 0.8rem;
+<span class="w"> </span>	}
+<span class="gi">+	fieldset {</span>
+<span class="gi">+		border: none;</span>
+<span class="gi">+		margin: 0.45rem 0 0;</span>
+<span class="gi">+		padding: 0;</span>
+<span class="gi">+	}</span>
+<span class="gi">+	fieldset legend {</span>
+<span class="gi">+		padding: 0;</span>
+<span class="gi">+		margin-bottom: 0.1rem;</span>
+<span class="gi">+	}</span>
+<span class="gi">+	fieldset label {</span>
+<span class="gi">+		margin: 0.15rem 0 0 1.2rem;</span>
+<span class="gi">+	}</span>
+<span class="w"> </span>	label.off {
+<span class="w"> </span>		color: #999;
+</code></pre></div>
+</details>
+<details>
+<summary>🔍 What changed in <code>app/src/lib/MapLibreMap.svelte</code> from <code>step-7</code> to <code>step-8</code></summary>
+<div class="code" data-lang="diff"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="gd">--- a/app/src/lib/MapLibreMap.svelte</span>
+<span class="gi">+++ b/app/src/lib/MapLibreMap.svelte</span>
+<span class="gu">@@ -4,5 +4,14 @@</span>
+<span class="w"> </span>	import &#39;maplibre-gl/dist/maplibre-gl.css&#39;;
+<span class="w"> </span>	import SensorDetail from &#39;#lib/SensorDetail.svelte&#39;;
+<span class="gd">-	import { addFloodDepth, addBuildings, floodDepthAt, buildingPopup } from &#39;#lib/scenario.js&#39;;</span>
+<span class="gi">+	import {</span>
+<span class="gi">+		addFloodDepth,</span>
+<span class="gi">+		addBuildings,</span>
+<span class="gi">+		floodDepthAt,</span>
+<span class="gi">+		buildingPopup,</span>
+<span class="gi">+		addFloodTimeseries,</span>
+<span class="gi">+		showFloodStep,</span>
+<span class="gi">+		floodDepthAtStep,</span>
+<span class="gi">+		timeseriesInfo</span>
+<span class="gi">+	} from &#39;#lib/scenario.js&#39;;</span>
+<span class="w"> </span>
+<span class="w"> </span>	// Step 2: the sensors on a 2D web map with MapLibre GL.
+<span class="gu">@@ -91,4 +100,10 @@</span>
+<span class="w"> </span>				if (building) {
+<span class="w"> </span>					new maplibregl.Popup().setLngLat(e.lngLat).setHTML(buildingPopup(building.properties)).addTo(m);
+<span class="gi">+				} else if (layers.floodTime.visible) {</span>
+<span class="gi">+					// Step 8: the depth at this place at the time on the slider.</span>
+<span class="gi">+					const [depth, info] = await Promise.all([floodDepthAtStep(e.lngLat), timeseriesInfo()]);</span>
+<span class="gi">+					const hours = (info.steps[layers.floodTime.band] * info.minutes_per_step) / 60;</span>
+<span class="gi">+					const text = depth == null ? &#39;Dry at this moment&#39; : `Flood depth: &lt;strong&gt;${depth.toFixed(2)} m&lt;/strong&gt;`;</span>
+<span class="gi">+					new maplibregl.Popup().setLngLat(e.lngLat).setHTML(`${text}&lt;br&gt;&lt;small&gt;100-year scenario, Time ${hours}:00&lt;/small&gt;`).addTo(m);</span>
+<span class="w"> </span>				} else if (layers.flood.visible) {
+<span class="w"> </span>					const depth = await floodDepthAt(e.lngLat);
+<span class="gu">@@ -129,4 +144,17 @@</span>
+<span class="w"> </span>		}
+<span class="w"> </span>	});
+<span class="gi">+</span>
+<span class="gi">+	// Step 8: the flood over time, and the time step chosen with the slider.</span>
+<span class="gi">+	// Like the max-depth raster, it goes under the buildings and the street names.</span>
+<span class="gi">+	$effect(() =&gt; {</span>
+<span class="gi">+		if (!map) return;</span>
+<span class="gi">+		const { visible, band } = layers.floodTime;</span>
+<span class="gi">+		const below = map.getLayer(&#39;buildings-exposed&#39;) ? &#39;buildings-exposed&#39; : map.getStyle().layers.find((l) =&gt; l.type === &#39;symbol&#39;)?.id;</span>
+<span class="gi">+		if (visible &amp;&amp; !map.getLayer(&#39;flood-time&#39;)) addFloodTimeseries(map, band, below);</span>
+<span class="gi">+		if (map.getLayer(&#39;flood-time&#39;)) {</span>
+<span class="gi">+			showFloodStep(map, band, below);</span>
+<span class="gi">+			map.setLayoutProperty(&#39;flood-time&#39;, &#39;visibility&#39;, visible ? &#39;visible&#39; : &#39;none&#39;);</span>
+<span class="gi">+		}</span>
+<span class="gi">+	});</span>
+<span class="w"> </span>&lt;/script&gt;
+</code></pre></div>
+</details>
+<details>
+<summary>📄 <code>app/src/lib/FloodTimeBar.svelte</code> as it is at <code>step-8</code></summary>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">onDestroy</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;svelte&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">layers</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/layers.svelte.js&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">timeseriesInfo</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/scenario.js&#39;</span><span class="p">;</span>
+
+<span class="w">	</span><span class="c1">// Step 8: the time bar for the flood over time, along the bottom of the map.</span>
+<span class="w">	</span><span class="c1">// One model output per hour: the first one is Time 0:00, and every step adds one hour.</span>
+<span class="w">	</span><span class="c1">// Above the slider, the wet area through the event, on the same time axis.</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">layer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">layers</span><span class="p">.</span><span class="nx">floodTime</span><span class="p">;</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">info</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span><span class="w"> </span><span class="c1">// { steps: [0, 1, …], minutes_per_step: 60, wet_km2: […] }</span>
+<span class="w">	</span><span class="nx">timeseriesInfo</span><span class="p">().</span><span class="nx">then</span><span class="p">((</span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">(</span><span class="nx">info</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">i</span><span class="p">));</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">last</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">info</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="nx">info</span><span class="p">.</span><span class="nx">steps</span><span class="p">.</span><span class="nx">length</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mf">1</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="mf">0</span><span class="p">);</span>
+
+<span class="w">	</span><span class="c1">// Time 0:00, Time 1:00, … from the model step and the minutes between two steps.</span>
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">time</span><span class="p">(</span><span class="nx">band</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="nx">minutes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">info</span><span class="p">.</span><span class="nx">steps</span><span class="p">[</span><span class="nx">band</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="nx">info</span><span class="p">.</span><span class="nx">minutes_per_step</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="mf">60</span><span class="p">);</span>
+<span class="w">		</span><span class="k">return</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nb">Math</span><span class="p">.</span><span class="nx">floor</span><span class="p">(</span><span class="nx">minutes</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">60</span><span class="p">)</span><span class="si">}</span><span class="sb">:</span><span class="si">${</span><span class="nb">String</span><span class="p">(</span><span class="nx">minutes</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mf">60</span><span class="p">).</span><span class="nx">padStart</span><span class="p">(</span><span class="mf">2</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;0&#39;</span><span class="p">)</span><span class="si">}</span><span class="sb">`</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+
+<span class="w">	</span><span class="c1">// ▶ plays one hour every 250 ms: the whole event in about 30 seconds.</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">timer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">play</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">timer</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">stop</span><span class="p">();</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">layer</span><span class="p">.</span><span class="nx">band</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">last</span><span class="p">)</span><span class="w"> </span><span class="nx">layer</span><span class="p">.</span><span class="nx">band</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0</span><span class="p">;</span><span class="w"> </span><span class="c1">// at the end: start again</span>
+<span class="w">		</span><span class="nx">timer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">setInterval</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">layer</span><span class="p">.</span><span class="nx">band</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">last</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">stop</span><span class="p">();</span>
+<span class="w">			</span><span class="nx">layer</span><span class="p">.</span><span class="nx">band</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mf">1</span><span class="p">;</span>
+<span class="w">		</span><span class="p">},</span><span class="w"> </span><span class="mf">250</span><span class="p">);</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">stop</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nx">clearInterval</span><span class="p">(</span><span class="nx">timer</span><span class="p">);</span>
+<span class="w">		</span><span class="nx">timer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nx">onDestroy</span><span class="p">(</span><span class="nx">stop</span><span class="p">);</span>
+
+<span class="w">	</span><span class="c1">// The wet-area chart and the tick marks share one coordinate system with the slider.</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">W</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">1000</span><span class="p">,</span><span class="w"> </span><span class="nx">H</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">40</span><span class="p">;</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">band</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">(</span><span class="nx">band</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="nx">last</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">W</span><span class="p">;</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">peak</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">info</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="nb">Math</span><span class="p">.</span><span class="nx">max</span><span class="p">(...</span><span class="nx">info</span><span class="p">.</span><span class="nx">wet_km2</span><span class="p">)</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">area</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span>
+<span class="w">		</span><span class="nx">info</span>
+<span class="w">			</span><span class="o">?</span><span class="w"> </span><span class="sb">`M0,</span><span class="si">${</span><span class="nx">H</span><span class="si">}</span><span class="sb"> `</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">info</span><span class="p">.</span><span class="nx">wet_km2</span><span class="p">.</span><span class="nx">map</span><span class="p">((</span><span class="nx">a</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="sb">`L</span><span class="si">${</span><span class="nx">x</span><span class="p">(</span><span class="nx">i</span><span class="p">).</span><span class="nx">toFixed</span><span class="p">(</span><span class="mf">1</span><span class="p">)</span><span class="si">}</span><span class="sb">,</span><span class="si">${</span><span class="p">(</span><span class="nx">H</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="p">(</span><span class="nx">a</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="nx">peak</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="nx">H</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mf">4</span><span class="p">)).</span><span class="nx">toFixed</span><span class="p">(</span><span class="mf">1</span><span class="p">)</span><span class="si">}</span><span class="sb">`</span><span class="p">).</span><span class="nx">join</span><span class="p">(</span><span class="s1">&#39; &#39;</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="sb">` L</span><span class="si">${</span><span class="nx">W</span><span class="si">}</span><span class="sb">,</span><span class="si">${</span><span class="nx">H</span><span class="si">}</span><span class="sb"> Z`</span>
+<span class="w">			</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;&#39;</span>
+<span class="w">	</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">labelled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">info</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="nx">info</span><span class="p">.</span><span class="nx">steps</span><span class="p">.</span><span class="nx">map</span><span class="p">((</span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">i</span><span class="p">).</span><span class="nx">filter</span><span class="p">((</span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mf">12</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="mf">0</span><span class="p">)</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[]);</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+{#if info}
+	<span class="p">&lt;</span><span class="nt">section</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;bar&quot;</span> <span class="na">aria-label</span><span class="o">=</span><span class="s">&quot;Flood over time&quot;</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;head&quot;</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">button</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{play}</span> <span class="na">aria-label</span><span class="o">=</span><span class="s">{timer</span> <span class="err">?</span> <span class="err">&#39;</span><span class="na">Pause</span><span class="err">&#39;</span> <span class="na">:</span> <span class="err">&#39;</span><span class="na">Play</span><span class="err">&#39;}</span><span class="p">&gt;</span>{timer ? &#39;❚❚&#39; : &#39;▶&#39;}<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">strong</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;now&quot;</span><span class="p">&gt;</span>Time {time(layer.band)}<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">span</span><span class="p">&gt;</span>{info.wet_km2[layer.band]} km² wet<span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">span</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;muted&quot;</span><span class="p">&gt;</span>· 100-year flood scenario, hours since the start of the model run<span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>
+		<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+
+		<span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;axis&quot;</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">svg</span> <span class="na">viewBox</span><span class="o">=</span><span class="s">&quot;0 0 {W} {H}&quot;</span> <span class="na">preserveAspectRatio</span><span class="o">=</span><span class="s">&quot;none&quot;</span> <span class="na">aria-hidden</span><span class="o">=</span><span class="s">&quot;true&quot;</span><span class="p">&gt;</span>
+				<span class="p">&lt;</span><span class="nt">path</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;area&quot;</span> <span class="na">d</span><span class="o">=</span><span class="s">{area}</span> <span class="p">/&gt;</span>
+				<span class="p">&lt;</span><span class="nt">line</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;now-line&quot;</span> <span class="na">x1</span><span class="o">=</span><span class="s">{x(layer.band)}</span> <span class="na">x2</span><span class="o">=</span><span class="s">{x(layer.band)}</span> <span class="na">y1</span><span class="o">=</span><span class="s">&quot;0&quot;</span> <span class="na">y2</span><span class="o">=</span><span class="s">{H}</span> <span class="p">/&gt;</span>
+			<span class="p">&lt;/</span><span class="nt">svg</span><span class="p">&gt;</span>
+
+			<span class="p">&lt;</span><span class="nt">input</span>
+				<span class="na">type</span><span class="o">=</span><span class="s">&quot;range&quot;</span>
+				<span class="na">min</span><span class="o">=</span><span class="s">&quot;0&quot;</span>
+				<span class="na">max</span><span class="o">=</span><span class="s">{last}</span>
+				<span class="na">step</span><span class="o">=</span><span class="s">&quot;1&quot;</span>
+				<span class="na">bind:value</span><span class="o">=</span><span class="s">{layer.band}</span>
+				<span class="na">oninput</span><span class="o">=</span><span class="s">{stop}</span>
+				<span class="na">aria-label</span><span class="o">=</span><span class="s">&quot;Time&quot;</span>
+				<span class="na">aria-valuetext</span><span class="o">=</span><span class="s">&quot;Time {time(layer.band)}&quot;</span>
+			<span class="p">/&gt;</span>
+
+			<span class="p">&lt;</span><span class="nt">svg</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;ticks&quot;</span> <span class="na">viewBox</span><span class="o">=</span><span class="s">&quot;0 0 {W} 8&quot;</span> <span class="na">preserveAspectRatio</span><span class="o">=</span><span class="s">&quot;none&quot;</span> <span class="na">aria-hidden</span><span class="o">=</span><span class="s">&quot;true&quot;</span><span class="p">&gt;</span>
+				{#each info.steps as _, i (i)}
+					<span class="p">&lt;</span><span class="nt">line</span> <span class="na">x1</span><span class="o">=</span><span class="s">{x(i)}</span> <span class="na">x2</span><span class="o">=</span><span class="s">{x(i)}</span> <span class="na">y1</span><span class="o">=</span><span class="s">&quot;0&quot;</span> <span class="na">y2</span><span class="o">=</span><span class="s">{i</span> <span class="err">%</span> <span class="na">12 </span><span class="o">=</span><span class="s">==</span> <span class="na">0</span> <span class="err">?</span> <span class="na">8</span> <span class="na">:</span> <span class="na">4</span><span class="err">}</span> <span class="p">/&gt;</span>
+				{/each}
+			<span class="p">&lt;/</span><span class="nt">svg</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;labels&quot;</span><span class="p">&gt;</span>
+				{#each labelled as i (i)}
+					<span class="p">&lt;</span><span class="nt">span</span> <span class="na">style:left</span><span class="o">=</span><span class="s">&quot;{(i / last) * 100}%&quot;</span><span class="p">&gt;</span>{time(i)}<span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>
+				{/each}
+			<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+		<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+	<span class="p">&lt;/</span><span class="nt">section</span><span class="p">&gt;</span>
+{/if}
+
+<span class="p">&lt;</span><span class="nt">style</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">bar</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">position</span><span class="p">:</span><span class="w"> </span><span class="kc">absolute</span><span class="p">;</span>
+<span class="w">		</span><span class="k">left</span><span class="p">:</span><span class="w"> </span><span class="mi">50</span><span class="kt">%</span><span class="p">;</span>
+<span class="w">		</span><span class="k">bottom</span><span class="p">:</span><span class="w"> </span><span class="mi">34</span><span class="kt">px</span><span class="p">;</span><span class="w"> </span><span class="c">/* above MapLibre&#39;s scale and attribution */</span>
+<span class="w">		</span><span class="k">transform</span><span class="p">:</span><span class="w"> </span><span class="nb">translateX</span><span class="p">(</span><span class="mi">-50</span><span class="kt">%</span><span class="p">);</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="nf">min</span><span class="p">(</span><span class="mi">820</span><span class="kt">px</span><span class="p">,</span><span class="w"> </span><span class="nb">calc</span><span class="p">(</span><span class="mi">100</span><span class="kt">%</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">120</span><span class="kt">px</span><span class="p">));</span>
+<span class="w">		</span><span class="k">z-index</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span>
+<span class="w">		</span><span class="k">padding</span><span class="p">:</span><span class="w"> </span><span class="mf">0.45</span><span class="kt">rem</span><span class="w"> </span><span class="mf">0.9</span><span class="kt">rem</span><span class="w"> </span><span class="mf">1.3</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">background</span><span class="p">:</span><span class="w"> </span><span class="nb">rgba</span><span class="p">(</span><span class="mi">255</span><span class="p">,</span><span class="w"> </span><span class="mi">255</span><span class="p">,</span><span class="w"> </span><span class="mi">255</span><span class="p">,</span><span class="w"> </span><span class="mf">0.95</span><span class="p">);</span>
+<span class="w">		</span><span class="k">border-radius</span><span class="p">:</span><span class="w"> </span><span class="mi">6</span><span class="kt">px</span><span class="p">;</span>
+<span class="w">		</span><span class="k">box-shadow</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="mi">1</span><span class="kt">px</span><span class="w"> </span><span class="mi">4</span><span class="kt">px</span><span class="w"> </span><span class="nb">rgba</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mf">0.25</span><span class="p">);</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">0.85</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">head</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">display</span><span class="p">:</span><span class="w"> </span><span class="kc">flex</span><span class="p">;</span>
+<span class="w">		</span><span class="k">align-items</span><span class="p">:</span><span class="w"> </span><span class="kc">baseline</span><span class="p">;</span>
+<span class="w">		</span><span class="k">gap</span><span class="p">:</span><span class="w"> </span><span class="mf">0.6</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">flex-wrap</span><span class="p">:</span><span class="w"> </span><span class="kc">wrap</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">head</span><span class="w"> </span><span class="nt">button</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">cursor</span><span class="p">:</span><span class="w"> </span><span class="kc">pointer</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">now</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">font-variant-numeric</span><span class="p">:</span><span class="w"> </span><span class="n">tabular-nums</span><span class="p">;</span>
+<span class="w">		</span><span class="k">min-width</span><span class="p">:</span><span class="w"> </span><span class="mf">6.5</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">muted</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#666</span><span class="p">;</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">0.8</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="c">/* 8px each side = half the slider&#39;s thumb, so the chart, ticks and labels line up with it */</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">axis</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">position</span><span class="p">:</span><span class="w"> </span><span class="kc">relative</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin-top</span><span class="p">:</span><span class="w"> </span><span class="mf">0.35</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">axis</span><span class="w"> </span><span class="nt">svg</span><span class="o">,</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">labels</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">display</span><span class="p">:</span><span class="w"> </span><span class="kc">block</span><span class="p">;</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="nb">calc</span><span class="p">(</span><span class="mi">100</span><span class="kt">%</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">16</span><span class="kt">px</span><span class="p">);</span>
+<span class="w">		</span><span class="k">margin</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="mi">8</span><span class="kt">px</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">axis</span><span class="w"> </span><span class="nt">svg</span><span class="p">:</span><span class="nd">first-child</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">height</span><span class="p">:</span><span class="w"> </span><span class="mf">2.2</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">area</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">fill</span><span class="p">:</span><span class="w"> </span><span class="mh">#c6dbef</span><span class="p">;</span>
+<span class="w">		</span><span class="k">stroke</span><span class="p">:</span><span class="w"> </span><span class="mh">#3182bd</span><span class="p">;</span>
+<span class="w">		</span><span class="k">stroke-width</span><span class="p">:</span><span class="w"> </span><span class="mf">1.5</span><span class="p">;</span>
+<span class="w">		</span><span class="n">vector-effect</span><span class="p">:</span><span class="w"> </span><span class="n">non-scaling-stroke</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">now-line</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">stroke</span><span class="p">:</span><span class="w"> </span><span class="mh">#c62828</span><span class="p">;</span>
+<span class="w">		</span><span class="k">stroke-width</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">		</span><span class="n">vector-effect</span><span class="p">:</span><span class="w"> </span><span class="n">non-scaling-stroke</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nt">input</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">display</span><span class="p">:</span><span class="w"> </span><span class="kc">block</span><span class="p">;</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="mi">100</span><span class="kt">%</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin</span><span class="p">:</span><span class="w"> </span><span class="mf">0.15</span><span class="kt">rem</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">ticks</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">height</span><span class="p">:</span><span class="w"> </span><span class="mi">8</span><span class="kt">px</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">ticks</span><span class="w"> </span><span class="nt">line</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">stroke</span><span class="p">:</span><span class="w"> </span><span class="mh">#888</span><span class="p">;</span>
+<span class="w">		</span><span class="k">stroke-width</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">		</span><span class="n">vector-effect</span><span class="p">:</span><span class="w"> </span><span class="n">non-scaling-stroke</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">labels</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">position</span><span class="p">:</span><span class="w"> </span><span class="kc">relative</span><span class="p">;</span>
+<span class="w">		</span><span class="k">height</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">labels</span><span class="w"> </span><span class="nt">span</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">position</span><span class="p">:</span><span class="w"> </span><span class="kc">absolute</span><span class="p">;</span>
+<span class="w">		</span><span class="k">transform</span><span class="p">:</span><span class="w"> </span><span class="nb">translateX</span><span class="p">(</span><span class="mi">-50</span><span class="kt">%</span><span class="p">);</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">0.72</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#444</span><span class="p">;</span>
+<span class="w">		</span><span class="k">font-variant-numeric</span><span class="p">:</span><span class="w"> </span><span class="n">tabular-nums</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">style</span><span class="p">&gt;</span>
+</code></pre></div>
+</details>
+<details>
+<summary>📄 <code>app/src/routes/maplibre/+page.svelte</code> as it is at <code>step-8</code></summary>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="nx">MapPage</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/MapPage.svelte&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="nx">MapLibreMap</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/MapLibreMap.svelte&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="nx">FloodTimeBar</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/FloodTimeBar.svelte&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">feed</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/feed.svelte.js&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">layers</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/layers.svelte.js&#39;</span><span class="p">;</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">MapPage</span><span class="p">&gt;</span>
+	<span class="p">&lt;</span><span class="nt">MapLibreMap</span> <span class="na">geojson</span><span class="o">=</span><span class="s">{feed.geojson}</span> <span class="err">{</span><span class="na">layers</span><span class="err">}</span> <span class="p">/&gt;</span>
+	<span class="cm">&lt;!-- Step 8: the time bar along the bottom, while the flood-over-time layer is on --&gt;</span>
+	{#if layers.floodTime.visible}
+		<span class="p">&lt;</span><span class="nt">FloodTimeBar</span> <span class="p">/&gt;</span>
+	{/if}
+<span class="p">&lt;/</span><span class="nt">MapPage</span><span class="p">&gt;</span>
+</code></pre></div>
+</details>
+<p><strong>Why it was done this way, things to try, questions:</strong> <a href="https://github.com/AlpinistPanda/flood-twin-lab/blob/main/STEPS.md#step-8--the-flood-over-time-a-time-slider--step-8">STEPS.md, step 8</a>.</p>
+<hr />
+<h2 id="walkthrough-step-8-in-small-pieces-with-all-the-code">Walkthrough: step 8 in small pieces, with all the code</h2>
+<h3 id="8a--look-at-the-time-series-description">8.A · Look at the time series' description</h3>
+<p>In <code>scenario.js</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="kd">const</span><span class="w"> </span><span class="nx">TIMESERIES_META_URL</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;/layers/depth_timeseries_100yr.json&#39;</span><span class="p">;</span>
+
+<span class="c1">// Which model step each band holds, and the wet area per step. Loaded once.</span>
+<span class="kd">let</span><span class="w"> </span><span class="nx">meta</span><span class="p">;</span>
+<span class="k">export</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">timeseriesInfo</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="nx">meta</span><span class="w"> </span><span class="o">??=</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="nx">TIMESERIES_META_URL</span><span class="p">).</span><span class="nx">then</span><span class="p">((</span><span class="nx">r</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">json</span><span class="p">());</span>
+<span class="w">	</span><span class="k">return</span><span class="w"> </span><span class="nx">meta</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Check that it loads: add, for a moment, to the script of <code>routes/maplibre/+page.svelte</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">timeseriesInfo</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/scenario.js&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="nx">timeseriesInfo</span><span class="p">().</span><span class="nx">then</span><span class="p">((</span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="nx">i</span><span class="p">.</span><span class="nx">steps</span><span class="p">.</span><span class="nx">length</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="p">.</span><span class="nx">minutes_per_step</span><span class="p">,</span><span class="w"> </span><span class="nb">Math</span><span class="p">.</span><span class="nx">max</span><span class="p">(...</span><span class="nx">i</span><span class="p">.</span><span class="nx">wet_km2</span><span class="p">)));</span>
+</code></pre></div>
+<p><strong>You see:</strong> in the console, <code>119 60 39.55</code>: 119 steps, an hour apart, at most 39.55 km² wet. Remove the two lines again.</p>
+<h3 id="8b--one-paint-for-both-rasters">8.B · One <code>paint</code> for both rasters</h3>
+<p>In <code>scenario.js</code>, split the colour function: one that colours a depth in metres, and the max-depth version that calls it:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c1">// One depth (m) → one colour. Called for EVERY pixel of every tile, so keep it simple and fast.</span>
+<span class="kd">function</span><span class="w"> </span><span class="nx">paint</span><span class="p">(</span><span class="nx">depth</span><span class="p">,</span><span class="w"> </span><span class="nx">colour</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="p">(</span><span class="nx">depth</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">DEPTH_CLASSES</span><span class="p">[</span><span class="mf">0</span><span class="p">][</span><span class="mf">0</span><span class="p">]))</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">colour</span><span class="p">.</span><span class="nx">set</span><span class="p">([</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">0</span><span class="p">]);</span><span class="w"> </span><span class="c1">// dry, or no data (NaN): transparent</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">rgb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">RGB</span><span class="p">[</span><span class="mf">0</span><span class="p">][</span><span class="mf">1</span><span class="p">];</span>
+<span class="w">	</span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="kr">from</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">]</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">RGB</span><span class="p">)</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">depth</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="kr">from</span><span class="p">)</span><span class="w"> </span><span class="nx">rgb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">c</span><span class="p">;</span>
+<span class="w">	</span><span class="nx">colour</span><span class="p">.</span><span class="nx">set</span><span class="p">([...</span><span class="nx">rgb</span><span class="p">,</span><span class="w"> </span><span class="mf">210</span><span class="p">]);</span>
+<span class="p">}</span>
+
+<span class="c1">// The max-depth file holds metres, one band.</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">colourDepth</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">([</span><span class="nx">depth</span><span class="p">],</span><span class="w"> </span><span class="nx">colour</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">paint</span><span class="p">(</span><span class="nx">depth</span><span class="p">,</span><span class="w"> </span><span class="nx">colour</span><span class="p">);</span>
+</code></pre></div>
+<p><strong>You see:</strong> <em>Maximum depth</em> looks exactly as before.</p>
+<h3 id="8c--the-time-series-at-one-fixed-hour">8.C · The time series at one fixed hour</h3>
+<p>Add to <code>scenario.js</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">TIMESERIES_URL</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nx">location</span><span class="p">.</span><span class="nx">origin</span><span class="si">}</span><span class="sb">/layers/depth_timeseries_100yr.tif`</span><span class="p">;</span>
+
+<span class="c1">// The time series holds centimetres, one band per time step. Which band to show is `shownBand`.</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">NODATA_CM</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">65535</span><span class="p">;</span>
+<span class="kd">let</span><span class="w"> </span><span class="nx">shownBand</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0</span><span class="p">;</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">colourDepthAtStep</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">pixel</span><span class="p">,</span><span class="w"> </span><span class="nx">colour</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">cm</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">pixel</span><span class="p">[</span><span class="nx">shownBand</span><span class="p">];</span>
+<span class="w">	</span><span class="nx">paint</span><span class="p">(</span><span class="nx">cm</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">NODATA_CM</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="kc">NaN</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">cm</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">100</span><span class="p">,</span><span class="w"> </span><span class="nx">colour</span><span class="p">);</span><span class="w"> </span><span class="c1">// we store centimetres, we compute in metres</span>
+<span class="p">};</span>
+</code></pre></div>
+<p>Register both colour functions in one place, and use it in <code>addFloodDepth</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="kd">let</span><span class="w"> </span><span class="nx">registered</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+<span class="kd">function</span><span class="w"> </span><span class="nx">registerOnce</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">registered</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="p">;</span>
+<span class="w">	</span><span class="nx">maplibregl</span><span class="p">.</span><span class="nx">addProtocol</span><span class="p">(</span><span class="s1">&#39;cog&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">cogProtocol</span><span class="p">);</span><span class="w"> </span><span class="c1">// once per page</span>
+<span class="w">	</span><span class="nx">setColorFunction</span><span class="p">(</span><span class="nx">FLOOD_URL</span><span class="p">,</span><span class="w"> </span><span class="nx">colourDepth</span><span class="p">);</span>
+<span class="w">	</span><span class="nx">setColorFunction</span><span class="p">(</span><span class="nx">TIMESERIES_URL</span><span class="p">,</span><span class="w"> </span><span class="nx">colourDepthAtStep</span><span class="p">);</span>
+<span class="w">	</span><span class="nx">registered</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">addFloodDepth</span><span class="p">(</span><span class="nx">map</span><span class="p">,</span><span class="w"> </span><span class="nx">beforeId</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="nx">registerOnce</span><span class="p">();</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">addSource</span><span class="p">(</span><span class="s1">&#39;flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;raster&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">url</span><span class="o">:</span><span class="w"> </span><span class="sb">`cog://</span><span class="si">${</span><span class="nx">FLOOD_URL</span><span class="si">}</span><span class="sb">`</span><span class="p">,</span><span class="w"> </span><span class="nx">tileSize</span><span class="o">:</span><span class="w"> </span><span class="mf">256</span><span class="w"> </span><span class="p">});</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">addLayer</span><span class="p">({</span><span class="w"> </span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood-depth&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;raster&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">source</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">paint</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s1">&#39;raster-opacity&#39;</span><span class="o">:</span><span class="w"> </span><span class="mf">0.8</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="nx">beforeId</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">addFloodTimeseries</span><span class="p">(</span><span class="nx">map</span><span class="p">,</span><span class="w"> </span><span class="nx">band</span><span class="p">,</span><span class="w"> </span><span class="nx">beforeId</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="nx">registerOnce</span><span class="p">();</span>
+<span class="w">	</span><span class="nx">shownBand</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">band</span><span class="p">;</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">addSource</span><span class="p">(</span><span class="s1">&#39;flood-time&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;raster&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">url</span><span class="o">:</span><span class="w"> </span><span class="sb">`cog://</span><span class="si">${</span><span class="nx">TIMESERIES_URL</span><span class="si">}</span><span class="sb">`</span><span class="p">,</span><span class="w"> </span><span class="nx">tileSize</span><span class="o">:</span><span class="w"> </span><span class="mf">256</span><span class="w"> </span><span class="p">});</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">addLayer</span><span class="p">(</span>
+<span class="w">		</span><span class="p">{</span>
+<span class="w">			</span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood-time&#39;</span><span class="p">,</span>
+<span class="w">			</span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;raster&#39;</span><span class="p">,</span>
+<span class="w">			</span><span class="nx">source</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood-time&#39;</span><span class="p">,</span>
+<span class="w">			</span><span class="nx">paint</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s1">&#39;raster-opacity&#39;</span><span class="o">:</span><span class="w"> </span><span class="mf">0.8</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;raster-fade-duration&#39;</span><span class="o">:</span><span class="w"> </span><span class="mf">0</span><span class="w"> </span><span class="p">}</span>
+<span class="w">		</span><span class="p">},</span>
+<span class="w">		</span><span class="nx">beforeId</span>
+<span class="w">	</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Add the layer to <code>layers.svelte.js</code>, with its time step (<code>band</code>) set to the peak for now:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="nx">floodTime</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Flood depth over time, 100-year flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visible</span><span class="o">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nx">legend</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;depth&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">band</span><span class="o">:</span><span class="w"> </span><span class="mf">59</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>In <code>MapLibreMap.svelte</code>, import <code>addFloodTimeseries</code>, and one more <code>$effect</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="c1">// The flood over time, at the time step in layers.floodTime.band.</span>
+<span class="w">	</span><span class="nx">$effect</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">map</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="p">;</span>
+<span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">visible</span><span class="p">,</span><span class="w"> </span><span class="nx">band</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">layers</span><span class="p">.</span><span class="nx">floodTime</span><span class="p">;</span>
+<span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="nx">below</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">map</span><span class="p">.</span><span class="nx">getLayer</span><span class="p">(</span><span class="s1">&#39;buildings-exposed&#39;</span><span class="p">)</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;buildings-exposed&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">map</span><span class="p">.</span><span class="nx">getStyle</span><span class="p">().</span><span class="nx">layers</span><span class="p">.</span><span class="nx">find</span><span class="p">((</span><span class="nx">l</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">l</span><span class="p">.</span><span class="nx">type</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;symbol&#39;</span><span class="p">)</span><span class="o">?</span><span class="p">.</span><span class="nx">id</span><span class="p">;</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">visible</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">!</span><span class="nx">map</span><span class="p">.</span><span class="nx">getLayer</span><span class="p">(</span><span class="s1">&#39;flood-time&#39;</span><span class="p">))</span><span class="w"> </span><span class="nx">addFloodTimeseries</span><span class="p">(</span><span class="nx">map</span><span class="p">,</span><span class="w"> </span><span class="nx">band</span><span class="p">,</span><span class="w"> </span><span class="nx">below</span><span class="p">);</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">map</span><span class="p">.</span><span class="nx">getLayer</span><span class="p">(</span><span class="s1">&#39;flood-time&#39;</span><span class="p">))</span><span class="w"> </span><span class="nx">map</span><span class="p">.</span><span class="nx">setLayoutProperty</span><span class="p">(</span><span class="s1">&#39;flood-time&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;visibility&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visible</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;visible&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;none&#39;</span><span class="p">);</span>
+<span class="w">	</span><span class="p">});</span>
+</code></pre></div>
+<p><strong>You see:</strong> a new checkbox <em>Flood depth over time</em>. Tick it (and untick <em>Max flood depth</em>): the flood at hour 59, close to the maximum. Change <code>band: 59</code> to <code>band: 10</code> in <code>layers.svelte.js</code> and reload: much less water.</p>
+<h3 id="8d--change-the-hour-remove-and-add-again">8.D · Change the hour: remove and add again</h3>
+<p>Add to <code>scenario.js</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c1">// Show time step `band`. The colours are made when MapLibre asks the plugin for a tile, so to</span>
+<span class="c1">// show another step we remove the layer and its source and add them again: MapLibre asks for</span>
+<span class="c1">// the tiles again, and the plugin colours them with the new band. The plugin keeps the bytes</span>
+<span class="c1">// it has already downloaded, so this costs no new download.</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">showFloodStep</span><span class="p">(</span><span class="nx">map</span><span class="p">,</span><span class="w"> </span><span class="nx">band</span><span class="p">,</span><span class="w"> </span><span class="nx">beforeId</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">band</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">shownBand</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="o">!</span><span class="nx">map</span><span class="p">.</span><span class="nx">getLayer</span><span class="p">(</span><span class="s1">&#39;flood-time&#39;</span><span class="p">))</span><span class="w"> </span><span class="k">return</span><span class="p">;</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">visibility</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">map</span><span class="p">.</span><span class="nx">getLayoutProperty</span><span class="p">(</span><span class="s1">&#39;flood-time&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;visibility&#39;</span><span class="p">);</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">removeLayer</span><span class="p">(</span><span class="s1">&#39;flood-time&#39;</span><span class="p">);</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">removeSource</span><span class="p">(</span><span class="s1">&#39;flood-time&#39;</span><span class="p">);</span>
+<span class="w">	</span><span class="nx">addFloodTimeseries</span><span class="p">(</span><span class="nx">map</span><span class="p">,</span><span class="w"> </span><span class="nx">band</span><span class="p">,</span><span class="w"> </span><span class="nx">beforeId</span><span class="p">);</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">setLayoutProperty</span><span class="p">(</span><span class="s1">&#39;flood-time&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;visibility&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visibility</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="s1">&#39;visible&#39;</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>In the effect of 8.C, import <code>showFloodStep</code> and call it when the layer exists:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">map</span><span class="p">.</span><span class="nx">getLayer</span><span class="p">(</span><span class="s1">&#39;flood-time&#39;</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="nx">showFloodStep</span><span class="p">(</span><span class="nx">map</span><span class="p">,</span><span class="w"> </span><span class="nx">band</span><span class="p">,</span><span class="w"> </span><span class="nx">below</span><span class="p">);</span>
+<span class="w">			</span><span class="nx">map</span><span class="p">.</span><span class="nx">setLayoutProperty</span><span class="p">(</span><span class="s1">&#39;flood-time&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;visibility&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visible</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;visible&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;none&#39;</span><span class="p">);</span>
+<span class="w">		</span><span class="p">}</span>
+</code></pre></div>
+<p>And a first, plain slider, on the map page for now. In <code>routes/maplibre/+page.svelte</code>, inside <code>&lt;MapPage&gt;</code>, after the map:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>	{#if layers.floodTime.visible}
+		<span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&quot;range&quot;</span> <span class="na">min</span><span class="o">=</span><span class="s">&quot;0&quot;</span> <span class="na">max</span><span class="o">=</span><span class="s">&quot;118&quot;</span> <span class="na">bind:value</span><span class="o">=</span><span class="s">{layers.floodTime.band}</span> <span class="na">style</span><span class="o">=</span><span class="s">&quot;position: absolute; bottom: 40px; left: 30%; width: 40%; z-index: 10&quot;</span> <span class="p">/&gt;</span>
+	{/if}
+</code></pre></div>
+<p><strong>You see:</strong> with <em>Over time</em> on, drag the slider: the water rises and falls. Set <code>band</code> back to <code>0</code> in <code>layers.svelte.js</code>.</p>
+<h3 id="8e--one-choice-instead-of-two-checkboxes">8.E · One choice instead of two checkboxes</h3>
+<p>In <code>layers.svelte.js</code>, put both flood layers in a group, and give each the name it has inside the group:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c1">// The groups, and the title they get in the layer panel.</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">GROUPS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">flood</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Flood depth, 100-year flood&#39;</span><span class="w"> </span><span class="p">};</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">layers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">({</span>
+<span class="w">	</span><span class="nx">sensors</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Water-level sensors (live)&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visible</span><span class="o">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nx">legend</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;levels&#39;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">	</span><span class="nx">buildings</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Buildings exposed, 100-year flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visible</span><span class="o">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nx">legend</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;exposure&#39;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">	</span><span class="nx">flood</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Max flood depth, 100-year flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visible</span><span class="o">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nx">legend</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;depth&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">group</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">option</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Maximum depth&#39;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">	</span><span class="nx">floodTime</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Flood depth over time, 100-year flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visible</span><span class="o">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nx">legend</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;depth&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">group</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">option</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Over time&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">band</span><span class="o">:</span><span class="w"> </span><span class="mf">0</span><span class="w"> </span><span class="p">}</span>
+<span class="p">});</span>
+</code></pre></div>
+<p>In <code>LayerPanel.svelte</code>, import <code>GROUPS</code> as well, and add helpers to the script:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="c1">// Layers in a group are shown as one choice (radio buttons): one of them, or none.</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">members</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">group</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nb">Object</span><span class="p">.</span><span class="nx">entries</span><span class="p">(</span><span class="nx">layers</span><span class="p">).</span><span class="nx">filter</span><span class="p">(([,</span><span class="w"> </span><span class="nx">l</span><span class="p">])</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">l</span><span class="p">.</span><span class="nx">group</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">group</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">firstOf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">group</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">members</span><span class="p">(</span><span class="nx">group</span><span class="p">)[</span><span class="mf">0</span><span class="p">][</span><span class="mf">0</span><span class="p">];</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">chosen</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">group</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">members</span><span class="p">(</span><span class="nx">group</span><span class="p">).</span><span class="nx">find</span><span class="p">(([,</span><span class="w"> </span><span class="nx">l</span><span class="p">])</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">l</span><span class="p">.</span><span class="nx">visible</span><span class="p">)</span><span class="o">?</span><span class="p">.[</span><span class="mf">0</span><span class="p">]</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">choose</span><span class="p">(</span><span class="nx">group</span><span class="p">,</span><span class="w"> </span><span class="nx">id</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="nx">key</span><span class="p">,</span><span class="w"> </span><span class="nx">l</span><span class="p">]</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">members</span><span class="p">(</span><span class="nx">group</span><span class="p">))</span><span class="w"> </span><span class="nx">l</span><span class="p">.</span><span class="nx">visible</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">key</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">id</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p>In the loop, a layer <strong>with</strong> a group is drawn once, at the group's first member; layers without a group keep their checkbox. Wrap your existing <code>&lt;label&gt;</code> and legends in the <code>{:else}</code>:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>		{#each Object.entries(layers) as [id, layer] (id)}
+			{@const ok = supported.includes(id)}
+			{#if layer.group}
+				{#if id === firstOf(layer.group)}
+					<span class="p">&lt;</span><span class="nt">fieldset</span><span class="p">&gt;</span>
+						<span class="p">&lt;</span><span class="nt">legend</span><span class="p">&gt;</span>{GROUPS[layer.group]}<span class="p">&lt;/</span><span class="nt">legend</span><span class="p">&gt;</span>
+						<span class="p">&lt;</span><span class="nt">label</span><span class="p">&gt;</span>
+							<span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&quot;radio&quot;</span> <span class="na">checked</span><span class="o">=</span><span class="s">{!chosen(layer.group)}</span> <span class="na">onchange</span><span class="o">=</span><span class="s">{()</span> <span class="err">=</span><span class="p">&gt;</span> choose(layer.group, null)} /&gt;
+							None
+						<span class="p">&lt;/</span><span class="nt">label</span><span class="p">&gt;</span>
+						{#each members(layer.group) as [key, member] (key)}
+							{@const can = supported.includes(key)}
+							<span class="p">&lt;</span><span class="nt">label</span> <span class="na">class:off</span><span class="o">=</span><span class="s">{!can}</span> <span class="na">title</span><span class="o">=</span><span class="s">{can</span> <span class="err">?</span> <span class="err">&#39;&#39;</span> <span class="na">:</span> <span class="err">&#39;</span><span class="na">Only</span> <span class="na">on</span> <span class="na">the</span> <span class="na">MapLibre</span> <span class="na">page</span><span class="err">&#39;}</span><span class="p">&gt;</span>
+								<span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&quot;radio&quot;</span> <span class="na">checked</span><span class="o">=</span><span class="s">{member.visible}</span> <span class="na">disabled</span><span class="o">=</span><span class="s">{!can}</span> <span class="na">onchange</span><span class="o">=</span><span class="s">{()</span> <span class="err">=</span><span class="p">&gt;</span> choose(layer.group, key)} /&gt;
+								{member.option}
+							<span class="p">&lt;/</span><span class="nt">label</span><span class="p">&gt;</span>
+						{/each}
+					<span class="p">&lt;/</span><span class="nt">fieldset</span><span class="p">&gt;</span>
+					{#if chosen(layer.group)}
+						<span class="p">&lt;</span><span class="nt">ul</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;legend&quot;</span><span class="p">&gt;</span>
+							{#each DEPTH_CLASSES as [from, colour], i (from)}
+								<span class="p">&lt;</span><span class="nt">li</span><span class="p">&gt;</span>
+									<span class="p">&lt;</span><span class="nt">i</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;sq&quot;</span> <span class="na">style:background</span><span class="o">=</span><span class="s">{colour}</span><span class="p">&gt;&lt;/</span><span class="nt">i</span><span class="p">&gt;</span>{from}{i <span class="p">&lt;</span> <span class="nt">DEPTH_CLASSES.length</span> <span class="na">-</span> <span class="na">1</span> <span class="err">?</span> <span class="err">`</span> <span class="err">–</span> <span class="err">${</span><span class="na">DEPTH_CLASSES</span><span class="err">[</span><span class="na">i</span> <span class="err">+</span> <span class="na">1</span><span class="err">][</span><span class="na">0</span><span class="err">]}`</span> <span class="na">:</span> <span class="err">&#39;</span> <span class="na">and</span> <span class="na">more</span><span class="err">&#39;}</span> <span class="na">m</span>
+								<span class="err">&lt;/</span><span class="na">li</span><span class="p">&gt;</span>
+							{/each}
+						<span class="p">&lt;/</span><span class="nt">ul</span><span class="p">&gt;</span>
+					{/if}
+				{/if}
+			{:else}
+				<span class="cm">&lt;!-- your checkbox &lt;label&gt; and the &#39;levels&#39; and &#39;exposure&#39; legends, as before --&gt;</span>
+			{/if}
+		{/each}
+</code></pre></div>
+<p>The <code>depth</code> legend branch of step 7 can go: the group draws its own legend. Style the fieldset:</p>
+<div class="code" data-lang="css"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="nt">fieldset</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">border</span><span class="p">:</span><span class="w"> </span><span class="kc">none</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin</span><span class="p">:</span><span class="w"> </span><span class="mf">0.45</span><span class="kt">rem</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">		</span><span class="k">padding</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nt">fieldset</span><span class="w"> </span><span class="nt">legend</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">padding</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin-bottom</span><span class="p">:</span><span class="w"> </span><span class="mf">0.1</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nt">fieldset</span><span class="w"> </span><span class="nt">label</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">margin</span><span class="p">:</span><span class="w"> </span><span class="mf">0.15</span><span class="kt">rem</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="mf">1.2</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p><strong>You see:</strong> <em>Flood depth, 100-year flood</em> with <em>None</em>, <em>Maximum depth</em>, <em>Over time</em>. Only one can be on, and there is one legend.</p>
+<h3 id="8f--the-time-bar">8.F · The time bar</h3>
+<p>Replace the plain slider on the map page by a component. Create <strong><code>app/src/lib/FloodTimeBar.svelte</code></strong>, starting with the slider and the time:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">layers</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/layers.svelte.js&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">timeseriesInfo</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/scenario.js&#39;</span><span class="p">;</span>
+
+<span class="w">	</span><span class="c1">// One model output per hour: the first one is Time 0:00, and every step adds one hour.</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">layer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">layers</span><span class="p">.</span><span class="nx">floodTime</span><span class="p">;</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">info</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span><span class="w"> </span><span class="c1">// { steps: [0, 1, …], minutes_per_step: 60, wet_km2: […] }</span>
+<span class="w">	</span><span class="nx">timeseriesInfo</span><span class="p">().</span><span class="nx">then</span><span class="p">((</span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">(</span><span class="nx">info</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">i</span><span class="p">));</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">last</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">info</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="nx">info</span><span class="p">.</span><span class="nx">steps</span><span class="p">.</span><span class="nx">length</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mf">1</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="mf">0</span><span class="p">);</span>
+
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">time</span><span class="p">(</span><span class="nx">band</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="nx">minutes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">info</span><span class="p">.</span><span class="nx">steps</span><span class="p">[</span><span class="nx">band</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="nx">info</span><span class="p">.</span><span class="nx">minutes_per_step</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="mf">60</span><span class="p">);</span>
+<span class="w">		</span><span class="k">return</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nb">Math</span><span class="p">.</span><span class="nx">floor</span><span class="p">(</span><span class="nx">minutes</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">60</span><span class="p">)</span><span class="si">}</span><span class="sb">:</span><span class="si">${</span><span class="nb">String</span><span class="p">(</span><span class="nx">minutes</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mf">60</span><span class="p">).</span><span class="nx">padStart</span><span class="p">(</span><span class="mf">2</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;0&#39;</span><span class="p">)</span><span class="si">}</span><span class="sb">`</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+{#if info}
+	<span class="p">&lt;</span><span class="nt">section</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;bar&quot;</span> <span class="na">aria-label</span><span class="o">=</span><span class="s">&quot;Flood over time&quot;</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;head&quot;</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">strong</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;now&quot;</span><span class="p">&gt;</span>Time {time(layer.band)}<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">span</span><span class="p">&gt;</span>{info.wet_km2[layer.band]} km² wet<span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>
+		<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&quot;range&quot;</span> <span class="na">min</span><span class="o">=</span><span class="s">&quot;0&quot;</span> <span class="na">max</span><span class="o">=</span><span class="s">{last}</span> <span class="na">step</span><span class="o">=</span><span class="s">&quot;1&quot;</span> <span class="na">bind:value</span><span class="o">=</span><span class="s">{layer.band}</span> <span class="na">aria-label</span><span class="o">=</span><span class="s">&quot;Time&quot;</span> <span class="p">/&gt;</span>
+	<span class="p">&lt;/</span><span class="nt">section</span><span class="p">&gt;</span>
+{/if}
+
+<span class="p">&lt;</span><span class="nt">style</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">bar</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">position</span><span class="p">:</span><span class="w"> </span><span class="kc">absolute</span><span class="p">;</span>
+<span class="w">		</span><span class="k">left</span><span class="p">:</span><span class="w"> </span><span class="mi">50</span><span class="kt">%</span><span class="p">;</span>
+<span class="w">		</span><span class="k">bottom</span><span class="p">:</span><span class="w"> </span><span class="mi">34</span><span class="kt">px</span><span class="p">;</span><span class="w"> </span><span class="c">/* above MapLibre&#39;s scale and attribution */</span>
+<span class="w">		</span><span class="k">transform</span><span class="p">:</span><span class="w"> </span><span class="nb">translateX</span><span class="p">(</span><span class="mi">-50</span><span class="kt">%</span><span class="p">);</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="nf">min</span><span class="p">(</span><span class="mi">820</span><span class="kt">px</span><span class="p">,</span><span class="w"> </span><span class="nb">calc</span><span class="p">(</span><span class="mi">100</span><span class="kt">%</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">120</span><span class="kt">px</span><span class="p">));</span>
+<span class="w">		</span><span class="k">z-index</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span>
+<span class="w">		</span><span class="k">padding</span><span class="p">:</span><span class="w"> </span><span class="mf">0.45</span><span class="kt">rem</span><span class="w"> </span><span class="mf">0.9</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">background</span><span class="p">:</span><span class="w"> </span><span class="nb">rgba</span><span class="p">(</span><span class="mi">255</span><span class="p">,</span><span class="w"> </span><span class="mi">255</span><span class="p">,</span><span class="w"> </span><span class="mi">255</span><span class="p">,</span><span class="w"> </span><span class="mf">0.95</span><span class="p">);</span>
+<span class="w">		</span><span class="k">border-radius</span><span class="p">:</span><span class="w"> </span><span class="mi">6</span><span class="kt">px</span><span class="p">;</span>
+<span class="w">		</span><span class="k">box-shadow</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="mi">1</span><span class="kt">px</span><span class="w"> </span><span class="mi">4</span><span class="kt">px</span><span class="w"> </span><span class="nb">rgba</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mf">0.25</span><span class="p">);</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">0.85</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">head</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">display</span><span class="p">:</span><span class="w"> </span><span class="kc">flex</span><span class="p">;</span>
+<span class="w">		</span><span class="k">gap</span><span class="p">:</span><span class="w"> </span><span class="mf">0.6</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nt">input</span><span class="o">[</span><span class="nt">type</span><span class="o">=</span><span class="s1">&#39;range&#39;</span><span class="o">]</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="mi">100</span><span class="kt">%</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">style</span><span class="p">&gt;</span>
+</code></pre></div>
+<p>On the map page:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="nx">MapPage</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/MapPage.svelte&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="nx">MapLibreMap</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/MapLibreMap.svelte&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="nx">FloodTimeBar</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/FloodTimeBar.svelte&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">feed</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/feed.svelte.js&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">layers</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/layers.svelte.js&#39;</span><span class="p">;</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">MapPage</span><span class="p">&gt;</span>
+	<span class="p">&lt;</span><span class="nt">MapLibreMap</span> <span class="na">geojson</span><span class="o">=</span><span class="s">{feed.geojson}</span> <span class="err">{</span><span class="na">layers</span><span class="err">}</span> <span class="p">/&gt;</span>
+	{#if layers.floodTime.visible}
+		<span class="p">&lt;</span><span class="nt">FloodTimeBar</span> <span class="p">/&gt;</span>
+	{/if}
+<span class="p">&lt;/</span><span class="nt">MapPage</span><span class="p">&gt;</span>
+</code></pre></div>
+<p><strong>You see:</strong> choose <em>Over time</em>: a white bar at the bottom, <em>Time 0:00 · 2.48 km² wet</em>. Drag: the time, the area and the map follow.</p>
+<h3 id="8g--play">8.G · Play</h3>
+<p>In the time bar's script:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">onDestroy</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;svelte&#39;</span><span class="p">;</span>
+
+<span class="w">	</span><span class="c1">// ▶ plays one hour every 250 ms: the whole event in about 30 seconds.</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">timer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">play</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">timer</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">stop</span><span class="p">();</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">layer</span><span class="p">.</span><span class="nx">band</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">last</span><span class="p">)</span><span class="w"> </span><span class="nx">layer</span><span class="p">.</span><span class="nx">band</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0</span><span class="p">;</span><span class="w"> </span><span class="c1">// at the end: start again</span>
+<span class="w">		</span><span class="nx">timer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">setInterval</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">layer</span><span class="p">.</span><span class="nx">band</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">last</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">stop</span><span class="p">();</span>
+<span class="w">			</span><span class="nx">layer</span><span class="p">.</span><span class="nx">band</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mf">1</span><span class="p">;</span>
+<span class="w">		</span><span class="p">},</span><span class="w"> </span><span class="mf">250</span><span class="p">);</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">stop</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nx">clearInterval</span><span class="p">(</span><span class="nx">timer</span><span class="p">);</span>
+<span class="w">		</span><span class="nx">timer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nx">onDestroy</span><span class="p">(</span><span class="nx">stop</span><span class="p">);</span>
+</code></pre></div>
+<p>A button at the start of <code>.head</code>, and stop playing when someone drags:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>			<span class="p">&lt;</span><span class="nt">button</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{play}</span> <span class="na">aria-label</span><span class="o">=</span><span class="s">{timer</span> <span class="err">?</span> <span class="err">&#39;</span><span class="na">Pause</span><span class="err">&#39;</span> <span class="na">:</span> <span class="err">&#39;</span><span class="na">Play</span><span class="err">&#39;}</span><span class="p">&gt;</span>{timer ? &#39;❚❚&#39; : &#39;▶&#39;}<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+</code></pre></div>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>		<span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&quot;range&quot;</span> <span class="na">min</span><span class="o">=</span><span class="s">&quot;0&quot;</span> <span class="na">max</span><span class="o">=</span><span class="s">{last}</span> <span class="na">step</span><span class="o">=</span><span class="s">&quot;1&quot;</span> <span class="na">bind:value</span><span class="o">=</span><span class="s">{layer.band}</span> <span class="na">oninput</span><span class="o">=</span><span class="s">{stop}</span> <span class="na">aria-label</span><span class="o">=</span><span class="s">&quot;Time&quot;</span> <span class="p">/&gt;</span>
+</code></pre></div>
+<p><strong>You see:</strong> ▶ plays the flood in about 30 seconds and stops at <em>Time 118:00</em>.</p>
+<h3 id="8h--ticks-labels-and-the-wet-area-curve">8.H · Ticks, labels and the wet-area curve</h3>
+<p>Under the slider: a tick per hour, a longer one and a label every 12 hours. Above it: the wet area through the event as a small filled chart, with a red line at the current time. All three use one coordinate system, 1000 units wide, stretched to the slider's width. In the script:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="c1">// The wet-area chart and the tick marks share one coordinate system with the slider.</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">W</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">1000</span><span class="p">,</span><span class="w"> </span><span class="nx">H</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">40</span><span class="p">;</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">band</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">(</span><span class="nx">band</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="nx">last</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">W</span><span class="p">;</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">peak</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">info</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="nb">Math</span><span class="p">.</span><span class="nx">max</span><span class="p">(...</span><span class="nx">info</span><span class="p">.</span><span class="nx">wet_km2</span><span class="p">)</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">area</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span>
+<span class="w">		</span><span class="nx">info</span>
+<span class="w">			</span><span class="o">?</span><span class="w"> </span><span class="sb">`M0,</span><span class="si">${</span><span class="nx">H</span><span class="si">}</span><span class="sb"> `</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">info</span><span class="p">.</span><span class="nx">wet_km2</span><span class="p">.</span><span class="nx">map</span><span class="p">((</span><span class="nx">a</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="sb">`L</span><span class="si">${</span><span class="nx">x</span><span class="p">(</span><span class="nx">i</span><span class="p">).</span><span class="nx">toFixed</span><span class="p">(</span><span class="mf">1</span><span class="p">)</span><span class="si">}</span><span class="sb">,</span><span class="si">${</span><span class="p">(</span><span class="nx">H</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="p">(</span><span class="nx">a</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="nx">peak</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="nx">H</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mf">4</span><span class="p">)).</span><span class="nx">toFixed</span><span class="p">(</span><span class="mf">1</span><span class="p">)</span><span class="si">}</span><span class="sb">`</span><span class="p">).</span><span class="nx">join</span><span class="p">(</span><span class="s1">&#39; &#39;</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="sb">` L</span><span class="si">${</span><span class="nx">W</span><span class="si">}</span><span class="sb">,</span><span class="si">${</span><span class="nx">H</span><span class="si">}</span><span class="sb"> Z`</span>
+<span class="w">			</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;&#39;</span>
+<span class="w">	</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">labelled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">info</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="nx">info</span><span class="p">.</span><span class="nx">steps</span><span class="p">.</span><span class="nx">map</span><span class="p">((</span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">i</span><span class="p">).</span><span class="nx">filter</span><span class="p">((</span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mf">12</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="mf">0</span><span class="p">)</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[]);</span>
+</code></pre></div>
+<p>Replace the <code>&lt;input type=&quot;range&quot; …&gt;</code> with:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>		<span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;axis&quot;</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">svg</span> <span class="na">viewBox</span><span class="o">=</span><span class="s">&quot;0 0 {W} {H}&quot;</span> <span class="na">preserveAspectRatio</span><span class="o">=</span><span class="s">&quot;none&quot;</span> <span class="na">aria-hidden</span><span class="o">=</span><span class="s">&quot;true&quot;</span><span class="p">&gt;</span>
+				<span class="p">&lt;</span><span class="nt">path</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;area&quot;</span> <span class="na">d</span><span class="o">=</span><span class="s">{area}</span> <span class="p">/&gt;</span>
+				<span class="p">&lt;</span><span class="nt">line</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;now-line&quot;</span> <span class="na">x1</span><span class="o">=</span><span class="s">{x(layer.band)}</span> <span class="na">x2</span><span class="o">=</span><span class="s">{x(layer.band)}</span> <span class="na">y1</span><span class="o">=</span><span class="s">&quot;0&quot;</span> <span class="na">y2</span><span class="o">=</span><span class="s">{H}</span> <span class="p">/&gt;</span>
+			<span class="p">&lt;/</span><span class="nt">svg</span><span class="p">&gt;</span>
+
+			<span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&quot;range&quot;</span> <span class="na">min</span><span class="o">=</span><span class="s">&quot;0&quot;</span> <span class="na">max</span><span class="o">=</span><span class="s">{last}</span> <span class="na">step</span><span class="o">=</span><span class="s">&quot;1&quot;</span> <span class="na">bind:value</span><span class="o">=</span><span class="s">{layer.band}</span> <span class="na">oninput</span><span class="o">=</span><span class="s">{stop}</span> <span class="na">aria-label</span><span class="o">=</span><span class="s">&quot;Time&quot;</span> <span class="p">/&gt;</span>
+
+			<span class="p">&lt;</span><span class="nt">svg</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;ticks&quot;</span> <span class="na">viewBox</span><span class="o">=</span><span class="s">&quot;0 0 {W} 8&quot;</span> <span class="na">preserveAspectRatio</span><span class="o">=</span><span class="s">&quot;none&quot;</span> <span class="na">aria-hidden</span><span class="o">=</span><span class="s">&quot;true&quot;</span><span class="p">&gt;</span>
+				{#each info.steps as _, i (i)}
+					<span class="p">&lt;</span><span class="nt">line</span> <span class="na">x1</span><span class="o">=</span><span class="s">{x(i)}</span> <span class="na">x2</span><span class="o">=</span><span class="s">{x(i)}</span> <span class="na">y1</span><span class="o">=</span><span class="s">&quot;0&quot;</span> <span class="na">y2</span><span class="o">=</span><span class="s">{i</span> <span class="err">%</span> <span class="na">12 </span><span class="o">=</span><span class="s">==</span> <span class="na">0</span> <span class="err">?</span> <span class="na">8</span> <span class="na">:</span> <span class="na">4</span><span class="err">}</span> <span class="p">/&gt;</span>
+				{/each}
+			<span class="p">&lt;/</span><span class="nt">svg</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;labels&quot;</span><span class="p">&gt;</span>
+				{#each labelled as i (i)}
+					<span class="p">&lt;</span><span class="nt">span</span> <span class="na">style:left</span><span class="o">=</span><span class="s">&quot;{(i / last) * 100}%&quot;</span><span class="p">&gt;</span>{time(i)}<span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>
+				{/each}
+			<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+		<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+</code></pre></div>
+<p><code>preserveAspectRatio=&quot;none&quot;</code> stretches the drawing to any width; <code>vector-effect: non-scaling-stroke</code> keeps the lines thin while it stretches. Replace the <code>input[type='range']</code> rule in the style with:</p>
+<div class="code" data-lang="css"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="p">.</span><span class="nc">axis</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">position</span><span class="p">:</span><span class="w"> </span><span class="kc">relative</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin-top</span><span class="p">:</span><span class="w"> </span><span class="mf">0.35</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">axis</span><span class="w"> </span><span class="nt">svg</span><span class="o">,</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">labels</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">display</span><span class="p">:</span><span class="w"> </span><span class="kc">block</span><span class="p">;</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="nb">calc</span><span class="p">(</span><span class="mi">100</span><span class="kt">%</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">16</span><span class="kt">px</span><span class="p">);</span>
+<span class="w">		</span><span class="k">margin</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="mi">8</span><span class="kt">px</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">axis</span><span class="w"> </span><span class="nt">svg</span><span class="p">:</span><span class="nd">first-child</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">height</span><span class="p">:</span><span class="w"> </span><span class="mf">2.2</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">area</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">fill</span><span class="p">:</span><span class="w"> </span><span class="mh">#c6dbef</span><span class="p">;</span>
+<span class="w">		</span><span class="k">stroke</span><span class="p">:</span><span class="w"> </span><span class="mh">#3182bd</span><span class="p">;</span>
+<span class="w">		</span><span class="k">stroke-width</span><span class="p">:</span><span class="w"> </span><span class="mf">1.5</span><span class="p">;</span>
+<span class="w">		</span><span class="n">vector-effect</span><span class="p">:</span><span class="w"> </span><span class="n">non-scaling-stroke</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">now-line</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">stroke</span><span class="p">:</span><span class="w"> </span><span class="mh">#c62828</span><span class="p">;</span>
+<span class="w">		</span><span class="k">stroke-width</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">		</span><span class="n">vector-effect</span><span class="p">:</span><span class="w"> </span><span class="n">non-scaling-stroke</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nt">input</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">display</span><span class="p">:</span><span class="w"> </span><span class="kc">block</span><span class="p">;</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="mi">100</span><span class="kt">%</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin</span><span class="p">:</span><span class="w"> </span><span class="mf">0.15</span><span class="kt">rem</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">ticks</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">height</span><span class="p">:</span><span class="w"> </span><span class="mi">8</span><span class="kt">px</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">ticks</span><span class="w"> </span><span class="nt">line</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">stroke</span><span class="p">:</span><span class="w"> </span><span class="mh">#888</span><span class="p">;</span>
+<span class="w">		</span><span class="k">stroke-width</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">		</span><span class="n">vector-effect</span><span class="p">:</span><span class="w"> </span><span class="n">non-scaling-stroke</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">labels</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">position</span><span class="p">:</span><span class="w"> </span><span class="kc">relative</span><span class="p">;</span>
+<span class="w">		</span><span class="k">height</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">labels</span><span class="w"> </span><span class="nt">span</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">position</span><span class="p">:</span><span class="w"> </span><span class="kc">absolute</span><span class="p">;</span>
+<span class="w">		</span><span class="k">transform</span><span class="p">:</span><span class="w"> </span><span class="nb">translateX</span><span class="p">(</span><span class="mi">-50</span><span class="kt">%</span><span class="p">);</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">0.72</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#444</span><span class="p">;</span>
+<span class="w">		</span><span class="k">font-variant-numeric</span><span class="p">:</span><span class="w"> </span><span class="n">tabular-nums</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p>(The <code>8px</code> margins keep the chart's ends above the ends of the slider's track.) Give <code>.bar</code> a bit more room at the bottom for the labels: <code>padding: 0.45rem 0.9rem 1.3rem;</code>.</p>
+<p><strong>You see:</strong> a blue curve rising to its peak around <em>Time 59:00</em>, the red line moving with the slider, and <em>0:00, 12:00, 24:00 …</em> under it.</p>
+<h3 id="8i--click-the-depth-at-this-hour">8.I · Click: the depth at this hour</h3>
+<p>In <code>scenario.js</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c1">// The depth at one place at the shown time step, in metres (null: dry or no data).</span>
+<span class="c1">// Unlike the colour function, locationValues() applies the file&#39;s scale factor for us:</span>
+<span class="c1">// it returns metres (0.84), not centimetres (84), and NaN where the file says &quot;no data&quot;.</span>
+<span class="k">export</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">floodDepthAtStep</span><span class="p">(</span><span class="nx">lngLat</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">values</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">locationValues</span><span class="p">(</span><span class="nx">TIMESERIES_URL</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">latitude</span><span class="o">:</span><span class="w"> </span><span class="nx">lngLat</span><span class="p">.</span><span class="nx">lat</span><span class="p">,</span><span class="w"> </span><span class="nx">longitude</span><span class="o">:</span><span class="w"> </span><span class="nx">lngLat</span><span class="p">.</span><span class="nx">lng</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="mf">16</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">depth</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">values</span><span class="p">[</span><span class="nx">shownBand</span><span class="p">];</span>
+<span class="w">	</span><span class="k">return</span><span class="w"> </span><span class="nb">Number</span><span class="p">.</span><span class="nb">isFinite</span><span class="p">(</span><span class="nx">depth</span><span class="p">)</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">depth</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">DEPTH_CLASSES</span><span class="p">[</span><span class="mf">0</span><span class="p">][</span><span class="mf">0</span><span class="p">]</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="nx">depth</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>In <code>MapLibreMap.svelte</code>, import <code>floodDepthAtStep</code> and <code>timeseriesInfo</code>, and in the general click handler, <strong>before</strong> the <code>layers.flood.visible</code> case:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">				</span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">layers</span><span class="p">.</span><span class="nx">floodTime</span><span class="p">.</span><span class="nx">visible</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">					</span><span class="c1">// The depth at this place at the time on the slider.</span>
+<span class="w">					</span><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="nx">depth</span><span class="p">,</span><span class="w"> </span><span class="nx">info</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nb">Promise</span><span class="p">.</span><span class="nx">all</span><span class="p">([</span><span class="nx">floodDepthAtStep</span><span class="p">(</span><span class="nx">e</span><span class="p">.</span><span class="nx">lngLat</span><span class="p">),</span><span class="w"> </span><span class="nx">timeseriesInfo</span><span class="p">()]);</span>
+<span class="w">					</span><span class="kd">const</span><span class="w"> </span><span class="nx">hours</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">info</span><span class="p">.</span><span class="nx">steps</span><span class="p">[</span><span class="nx">layers</span><span class="p">.</span><span class="nx">floodTime</span><span class="p">.</span><span class="nx">band</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">info</span><span class="p">.</span><span class="nx">minutes_per_step</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">60</span><span class="p">;</span>
+<span class="w">					</span><span class="kd">const</span><span class="w"> </span><span class="nx">text</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">depth</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;Dry at this moment&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="sb">`Flood depth: &lt;strong&gt;</span><span class="si">${</span><span class="nx">depth</span><span class="p">.</span><span class="nx">toFixed</span><span class="p">(</span><span class="mf">2</span><span class="p">)</span><span class="si">}</span><span class="sb"> m&lt;/strong&gt;`</span><span class="p">;</span>
+<span class="w">					</span><span class="ow">new</span><span class="w"> </span><span class="nx">maplibregl</span><span class="p">.</span><span class="nx">Popup</span><span class="p">().</span><span class="nx">setLngLat</span><span class="p">(</span><span class="nx">e</span><span class="p">.</span><span class="nx">lngLat</span><span class="p">).</span><span class="nx">setHTML</span><span class="p">(</span><span class="sb">`</span><span class="si">${</span><span class="nx">text</span><span class="si">}</span><span class="sb">&lt;br&gt;&lt;small&gt;100-year scenario, Time </span><span class="si">${</span><span class="nx">hours</span><span class="si">}</span><span class="sb">:00&lt;/small&gt;`</span><span class="p">).</span><span class="nx">addTo</span><span class="p">(</span><span class="nx">m</span><span class="p">);</span>
+</code></pre></div>
+<p><strong>You see:</strong> click the water at <em>Time 59:00</em>: its depth then; at <em>Time 10:00</em>: less, or <em>Dry at this moment</em>. That's the reference of this step. Commit.</p>
+<hr />
+<p><a href="09-containers.html">Step 9 · Containers →</a></p>
+
+    </article>
+    <nav class="next" aria-label="Previous and next"><a class="prev" href="07-flood-layers.html"><span>Previous</span>7 · Flood raster and vector</a><a class="nxt" href="09-containers.html"><span>Next</span>9 · Containers</a></nav>
+  </main>
+  <nav class="toc" aria-label="On this page"><p>On this page</p><ol><li><a href="#the-data">The data</a></li><li><a href="#81--one-layer-per-time-step-no-one-layer-redrawn">8.1 · One layer per time step? No: one layer, redrawn</a></li><li><a href="#82--two-flood-layers-one-choice">8.2 · Two flood layers, one choice</a></li><li><a href="#83--the-time-bar-appsrclibfloodtimebarsvelte">8.3 · The time bar: app/src/lib/FloodTimeBar.svelte</a></li><li><a href="#84--the-map-follows-the-slider">8.4 · The map follows the slider</a></li><li><a href="#check">Check</a></li><li><a href="#stuck">Stuck?</a></li><li><a href="#walkthrough-step-8-in-small-pieces-with-all-the-code">Walkthrough: step 8 in small pieces, with all the code</a></li></ol></nav>
+</div>
+<script src="assets/guide.js"></script>
+</body>
+</html>

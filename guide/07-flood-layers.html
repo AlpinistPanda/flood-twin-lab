@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 7 · A flood model: one raster, one vector · Flood twin build guide</title>
+<link rel="stylesheet" href="assets/guide.css">
+<script>try{const t=localStorage.getItem('guide-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header class="top">
+  <button class="menu" type="button" aria-label="Show steps" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">Flood twin <span>build guide</span></a>
+  <a class="repo" href="https://github.com/AlpinistPanda/flood-twin-lab">GitHub</a>
+  <button class="theme" type="button" aria-label="Switch light or dark">◐</button>
+</header>
+<div class="layout">
+  <aside class="side"><nav aria-label="Steps"><ol><li><a href="index.html">Overview</a></li><li><a href="00-sveltekit.html">0 · An empty SvelteKit app</a></li><li><a href="01-feed-table.html">1 · The live feed as a table</a></li><li><a href="02-maplibre.html">2 · Sensors on a map</a></li><li><a href="03-thresholds.html">3 · Thresholds and alerts</a></li><li><a href="04-live.html">4 · Live updates</a></li><li><a href="05-pages-layers.html">5 · Pages and layers</a></li><li><a href="06-charts.html">6 · Charts in the popup</a></li><li><a href="07-flood-layers.html" aria-current="page">7 · Flood raster and vector</a></li><li><a href="08-flood-time.html">8 · The flood over time</a></li><li><a href="09-containers.html">9 · Containers</a></li><li><a href="api.html">The sensor API</a></li></ol></nav></aside>
+  <main>
+    <article>
+<h1 id="step-7--a-flood-model-one-raster-one-vector">Step 7 · A flood model: one raster, one vector</h1>
+<p class="pager"><a href="06-charts.html">← Step 6</a> · <a href="index.html">Guide overview</a> · <a href="08-flood-time.html">Step 8 →</a></p>
+<p><strong>You build:</strong> two layers from a 100-year flood <strong>scenario</strong>, next to the live sensors: the <strong>maximum flood depth</strong> as a raster (blue, by depth), and the <strong>buildings it reaches</strong> as a vector layer (coloured with the sensors' thresholds). Click a building for its details, click the water for its depth.
+<strong>You learn:</strong> Cloud-Optimized GeoTIFFs in the browser; MapLibre protocols and colour functions; vector fill layers with <code>step</code> expressions; layer order; loading layers on demand.
+<strong>Time:</strong> about 75 minutes.
+<strong>Start from:</strong> your step 6, or the tag <code>step-6</code>.</p>
+<hr />
+<h2 id="the-data">The data</h2>
+<p>The flood layers are <strong>files</strong>, not an API. Like the sensor API, they are given: they come from a hydrodynamic model run that is not part of this course. Read the <em>Flood scenario layers</em> part of <a href="https://github.com/AlpinistPanda/flood-twin-lab/blob/main/data/README.md"><code>data/README.md</code></a>.</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Type</th>
+<th>What</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>max_depth_100yr.tif</code></td>
+<td><strong>Raster</strong>, Cloud-Optimized GeoTIFF, 1.9 MB</td>
+<td>The deepest water each 10 m cell reaches during the flood, in metres. Web Mercator. Empty (<em>no data</em>) where it stays dry</td>
+</tr>
+<tr>
+<td><code>buildings_exposure.geojson</code></td>
+<td><strong>Vector</strong>, GeoJSON, 4.1 MB</td>
+<td>14,188 OpenStreetMap buildings with at least 0.15 m of water. Properties: <code>osm_id</code>, <code>use</code> (the OpenStreetMap building tag), <code>depth_m</code></td>
+</tr>
+</tbody>
+</table>
+<p>Get them into your app. Files in <code>app/static/</code> are served as they are, so <code>app/static/layers/max_depth_100yr.tif</code> is at <code>/layers/max_depth_100yr.tif</code>. In the repository folder:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>git<span class="w"> </span>checkout<span class="w"> </span>step-9<span class="w"> </span>--<span class="w"> </span>app/static/layers
+</code></pre></div>
+<p>That copies all four layer files from the finished twin (the tag <code>step-9</code>) into your app (you need the other two in step 8).</p>
+<h2 id="raster-and-vector">Raster and vector</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Raster: flood depth</th>
+<th>Vector: buildings</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>What it is</td>
+<td>A grid: one number per 10 m cell</td>
+<td>Shapes, each with properties</td>
+</tr>
+<tr>
+<td>How it reaches the map</td>
+<td>A plugin reads only the parts of the file it needs, and turns them into map tiles <strong>in the browser</strong></td>
+<td>MapLibre downloads the whole file once</td>
+</tr>
+<tr>
+<td>Colour</td>
+<td>Your own JavaScript function, for every pixel</td>
+<td>A style expression on <code>depth_m</code>, like the sensors</td>
+</tr>
+<tr>
+<td>Click</td>
+<td>Read the number in the file at that spot</td>
+<td>The feature's properties</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Cloud-Optimized GeoTIFF (COG)</strong> is an ordinary GeoTIFF, arranged so that a program can read one small piece of it without downloading the rest: the browser asks for <em>bytes 1,204,224 to 1,269,759</em> (an HTTP <strong>range request</strong>), and any web server can answer that. No tile server, no database. It also holds smaller copies of the data (<strong>overviews</strong>) for zoomed-out views.</p>
+<h2 id="71--install-the-cog-plugin">7.1 · Install the COG plugin</h2>
+<p>MapLibre can't read GeoTIFFs by itself. The plugin <code>@geomatico/maplibre-cog-protocol</code> teaches it. In <code>app/</code>:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>npm<span class="w"> </span>install<span class="w"> </span>@geomatico/maplibre-cog-protocol@0.10.0
+</code></pre></div>
+<h2 id="72--everything-about-the-scenario-in-one-file-appsrclibscenariojs">7.2 · Everything about the scenario in one file: <code>app/src/lib/scenario.js</code></h2>
+<p>Keep the map component about <em>maps</em>, and put what is specific to this scenario in its own file: the URLs, the colours, how to add each layer, what a click shows.</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">import</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nx">maplibregl</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;maplibre-gl&#39;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">cogProtocol</span><span class="p">,</span><span class="w"> </span><span class="nx">setColorFunction</span><span class="p">,</span><span class="w"> </span><span class="nx">locationValues</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;@geomatico/maplibre-cog-protocol&#39;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">waterLevel</span><span class="p">,</span><span class="w"> </span><span class="nx">LEVELS</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/sensors.js&#39;</span><span class="p">;</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">FLOOD_URL</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nx">location</span><span class="p">.</span><span class="nx">origin</span><span class="si">}</span><span class="sb">/layers/max_depth_100yr.tif`</span><span class="p">;</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">BUILDINGS_URL</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;/layers/buildings_exposure.geojson&#39;</span><span class="p">;</span>
+</code></pre></div>
+<p>The plugin needs a <strong>full</strong> address (with <code>https://…</code>), which <code>location.origin</code> gives you.</p>
+<p><strong>a · Depth classes.</strong> Six blues, light to dark, <code>[from (m), colour]</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">DEPTH_CLASSES</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+<span class="w">	</span><span class="p">[</span><span class="mf">0.05</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#c6dbef&#39;</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mf">0.15</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#9ecae1&#39;</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mf">0.3</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#6baed6&#39;</span><span class="p">],</span>
+<span class="w">	</span><span class="p">[</span><span class="mf">0.5</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#3182bd&#39;</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#08519c&#39;</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mf">2</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#08306b&#39;</span><span class="p">]</span>
+<span class="p">];</span>
+</code></pre></div>
+<p><strong>b · The colour function.</strong> The plugin calls a function of yours <strong>for every pixel of every tile</strong>, with the pixel's values (one per band) and an array to write the colour into, as <code>[red, green, blue, alpha]</code> from 0 to 255:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="kd">function</span><span class="w"> </span><span class="nx">colourDepth</span><span class="p">([</span><span class="nx">depth</span><span class="p">],</span><span class="w"> </span><span class="nx">colour</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="p">(</span><span class="nx">depth</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">DEPTH_CLASSES</span><span class="p">[</span><span class="mf">0</span><span class="p">][</span><span class="mf">0</span><span class="p">]))</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">colour</span><span class="p">.</span><span class="nx">set</span><span class="p">([</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">0</span><span class="p">]);</span><span class="w"> </span><span class="c1">// dry or no data: transparent</span>
+<span class="w">	</span><span class="c1">// … find the class for this depth, and colour.set([r, g, b, 210]);</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Write the rest. Turn the hex colours into <code>[r, g, b]</code> numbers <strong>once</strong>, outside the function (<code>parseInt('c6', 16)</code> is 198): this function runs millions of times. Why <code>!(depth &gt;= …)</code> and not <code>depth &lt; …</code>? <em>No data</em> arrives as <code>NaN</code>, and every comparison with <code>NaN</code> is false: <code>NaN &lt; 0.05</code> is false too, so <code>NaN</code> would get a colour. <code>!(NaN &gt;= 0.05)</code> is true.</p>
+<p><strong>c · Add the raster to a map.</strong> MapLibre lets you register a <strong>protocol</strong>: addresses that start with <code>cog://</code> are handed to the plugin.</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="kd">let</span><span class="w"> </span><span class="nx">registered</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">addFloodDepth</span><span class="p">(</span><span class="nx">map</span><span class="p">,</span><span class="w"> </span><span class="nx">beforeId</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">registered</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nx">maplibregl</span><span class="p">.</span><span class="nx">addProtocol</span><span class="p">(</span><span class="s1">&#39;cog&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">cogProtocol</span><span class="p">);</span><span class="w"> </span><span class="c1">// once per page</span>
+<span class="w">		</span><span class="nx">setColorFunction</span><span class="p">(</span><span class="nx">FLOOD_URL</span><span class="p">,</span><span class="w"> </span><span class="nx">colourDepth</span><span class="p">);</span>
+<span class="w">		</span><span class="nx">registered</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">addSource</span><span class="p">(</span><span class="s1">&#39;flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;raster&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">url</span><span class="o">:</span><span class="w"> </span><span class="sb">`cog://</span><span class="si">${</span><span class="nx">FLOOD_URL</span><span class="si">}</span><span class="sb">`</span><span class="p">,</span><span class="w"> </span><span class="nx">tileSize</span><span class="o">:</span><span class="w"> </span><span class="mf">256</span><span class="w"> </span><span class="p">});</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">addLayer</span><span class="p">({</span><span class="w"> </span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood-depth&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;raster&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">source</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">paint</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s1">&#39;raster-opacity&#39;</span><span class="o">:</span><span class="w"> </span><span class="mf">0.8</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="nx">beforeId</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><code>beforeId</code>: the new layer is drawn <strong>under</strong> the layer with that id. See 7.4.</p>
+<p><strong>d · The depth at a click.</strong> Read the value from the file, not from the colours on screen:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">export</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">floodDepthAt</span><span class="p">(</span><span class="nx">lngLat</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="nx">depth</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">locationValues</span><span class="p">(</span><span class="nx">FLOOD_URL</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">latitude</span><span class="o">:</span><span class="w"> </span><span class="nx">lngLat</span><span class="p">.</span><span class="nx">lat</span><span class="p">,</span><span class="w"> </span><span class="nx">longitude</span><span class="o">:</span><span class="w"> </span><span class="nx">lngLat</span><span class="p">.</span><span class="nx">lng</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="mf">16</span><span class="p">);</span>
+<span class="w">	</span><span class="k">return</span><span class="w"> </span><span class="nb">Number</span><span class="p">.</span><span class="nb">isFinite</span><span class="p">(</span><span class="nx">depth</span><span class="p">)</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">depth</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">DEPTH_CLASSES</span><span class="p">[</span><span class="mf">0</span><span class="p">][</span><span class="mf">0</span><span class="p">]</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="nx">depth</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>The <code>16</code> asks for the <strong>full-resolution</strong> data (zoom 16). Without it, at zoom 12 the plugin reads an overview, and can give 0.21 m where the real value is 0.84 m.</p>
+<p><strong>e · The buildings.</strong> A GeoJSON source and a <code>fill</code> layer, coloured with the <strong>same thresholds as the sensors</strong>, so a red building and a red sensor mean the same thing. A <code>step</code> expression picks a colour by value:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="s1">&#39;fill-color&#39;</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;step&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;get&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;depth_m&#39;</span><span class="p">],</span>
+<span class="w">	</span><span class="nx">LEVELS</span><span class="p">.</span><span class="nx">watch</span><span class="p">.</span><span class="nx">colour</span><span class="p">,</span><span class="w">           </span><span class="c1">// below 0.3</span>
+<span class="w">	</span><span class="mf">0.3</span><span class="p">,</span><span class="w"> </span><span class="nx">LEVELS</span><span class="p">.</span><span class="nx">warning</span><span class="p">.</span><span class="nx">colour</span><span class="p">,</span><span class="w">    </span><span class="c1">// from 0.3</span>
+<span class="w">	</span><span class="mf">0.5</span><span class="p">,</span><span class="w"> </span><span class="nx">LEVELS</span><span class="p">.</span><span class="nx">danger</span><span class="p">.</span><span class="nx">colour</span><span class="w">      </span><span class="c1">// from 0.5</span>
+<span class="p">],</span>
+</code></pre></div>
+<p>Write <code>export function addBuildings(map, beforeId)</code>, with a source <code>buildings</code> and a layer <code>buildings-exposed</code>.</p>
+<p><strong>f · The building popup.</strong> <code>export function buildingPopup(p)</code> returns the HTML for a building's properties: its OpenStreetMap id, its <code>use</code>, the max depth and its level (<code>waterLevel(p.depth_m)</code>), and the words <em>Exposure, not damage</em>.</p>
+<h2 id="73--two-new-layers-in-the-list">7.3 · Two new layers in the list</h2>
+<p>In <code>layers.svelte.js</code>, add two entries, <strong>switched off</strong> at the start:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="nx">buildings</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Buildings exposed, 100-year flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visible</span><span class="o">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nx">legend</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;exposure&#39;</span><span class="w"> </span><span class="p">},</span>
+<span class="nx">flood</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Max flood depth, 100-year flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visible</span><span class="o">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nx">legend</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;depth&#39;</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>The layer panel shows them by itself. Add their <strong>legends</strong> in <code>LayerPanel.svelte</code>: for <code>exposure</code>, the three threshold colours (<em>0.15 – 0.30 m</em>, <em>0.30 – 0.50 m</em>, <em>0.50 m and more</em>); for <code>depth</code>, one row per <code>DEPTH_CLASSES</code> entry (<em>0.05 – 0.15 m</em>, …, <em>2 m and more</em>). Square swatches (<code>border-radius: 2px</code>) for areas, round dots for the sensors.</p>
+<p><strong>Pages that can't draw a layer.</strong> Later map pages (the extras) may not support every layer. Give <code>LayerPanel</code> a prop <code>supported</code> (default: every layer), grey out and disable the others, and let <code>MapPage</code> pass it on. The MapLibre page supports everything, so it doesn't need to pass anything.</p>
+<h2 id="74--draw-them-only-when-asked-in-the-right-order">7.4 · Draw them, only when asked, in the right order</h2>
+<p>In <code>MapLibreMap.svelte</code>, one more <code>$effect</code> for the two scenario layers:</p>
+<ol>
+<li>
+<p><strong>Only when switched on.</strong> The data is downloaded the first time a layer is switched on: if <code>layers.flood.visible</code> and there is no <code>flood-depth</code> layer yet, call <code>addFloodDepth</code>. The same for the buildings. Nobody downloads 4 MB of buildings they never look at.</p>
+</li>
+<li>
+<p><strong>After that, only show and hide</strong> with <code>setLayoutProperty(id, 'visibility', …)</code>, as for the sensors.</p>
+</li>
+<li>
+<p><strong>Order.</strong> MapLibre draws layers in the order they're added: later on top. You want, from bottom to top: basemap areas and streets, <strong>flood raster</strong>, <strong>buildings</strong>, basemap <strong>labels</strong> (street names stay readable), <strong>sensors</strong>. The first label layer of the basemap is the first layer of type <code>symbol</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="kd">const</span><span class="w"> </span><span class="nx">underLabels</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">map</span><span class="p">.</span><span class="nx">getStyle</span><span class="p">().</span><span class="nx">layers</span><span class="p">.</span><span class="nx">find</span><span class="p">((</span><span class="nx">l</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">l</span><span class="p">.</span><span class="nx">type</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;symbol&#39;</span><span class="p">)</span><span class="o">?</span><span class="p">.</span><span class="nx">id</span><span class="p">;</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">underBuildings</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">map</span><span class="p">.</span><span class="nx">getLayer</span><span class="p">(</span><span class="s1">&#39;buildings-exposed&#39;</span><span class="p">)</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;buildings-exposed&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">underLabels</span><span class="p">;</span>
+</code></pre></div>
+<p>Add the buildings under the labels, and the raster under the buildings (or under the labels if there are no buildings yet). Then the order is right whichever layer you switch on first.</p>
+</li>
+</ol>
+<p><strong>Clicks.</strong> In <code>m.on('load', …)</code> add a general click handler (without a layer id). It runs for every click, also on sensors, so first check whether a sensor was hit, and do nothing then (the sensor popup handles it):</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="nx">m</span><span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="s1">&#39;click&#39;</span><span class="p">,</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="p">(</span><span class="nx">e</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">m</span><span class="p">.</span><span class="nx">queryRenderedFeatures</span><span class="p">(</span><span class="nx">e</span><span class="p">.</span><span class="nx">point</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">layers</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;sensor-dots&#39;</span><span class="p">]</span><span class="w"> </span><span class="p">}).</span><span class="nx">length</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="p">;</span>
+<span class="w">	</span><span class="c1">// a building here? (only if the building layer exists) → buildingPopup</span>
+<span class="w">	</span><span class="c1">// otherwise, if the flood layer is on → floodDepthAt(e.lngLat), and a popup with the depth</span>
+<span class="w">	</span><span class="c1">//   or &quot;Dry in this scenario&quot;</span>
+<span class="p">});</span>
+</code></pre></div>
+<h2 id="check">Check</h2>
+<ul>
+<li>[ ] The Layers box has three layers; the two new ones are off.</li>
+<li>[ ] <strong>Max flood depth</strong> on: blue areas along the water courses, under the street names. Dark blue where it's deep. The legend shows six classes.</li>
+<li>[ ] <strong>Network</strong> tab: requests for <code>max_depth_100yr.tif</code> with status <strong>206</strong> (<em>Partial Content</em>): range requests. Pan around: more of them.</li>
+<li>[ ] <strong>Buildings exposed</strong> on: yellow, orange and red buildings, <strong>on top of</strong> the blue.</li>
+<li>[ ] Click a building: its popup. Click blue water away from buildings: its depth. Click a dry spot: <em>Dry in this scenario</em>. Click a sensor: still the sensor popup, only.</li>
+<li>[ ] Switch the layers off and on: no new download of the GeoJSON.</li>
+</ul>
+<p>Commit your work.</p>
+<h2 id="stuck">Stuck?</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Try</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The flood layer stays empty, console says <em>Failed to fetch</em> or <em>Invalid URL</em></td>
+<td><code>FLOOD_URL</code> must be a full address: <code>${location.origin}/layers/…</code></td>
+</tr>
+<tr>
+<td>The whole map area is blue, or tiles are black</td>
+<td>Your colour function colours <em>no data</em> (<code>NaN</code>) or dry cells. Use <code>!(depth &gt;= …)</code></td>
+</tr>
+<tr>
+<td>The raster hides the street names</td>
+<td>Pass <code>beforeId</code> (the first <code>symbol</code> layer) to <code>addLayer</code></td>
+</tr>
+<tr>
+<td>The buildings are under the raster</td>
+<td>The raster was added after the buildings without <code>beforeId: 'buildings-exposed'</code></td>
+</tr>
+<tr>
+<td>A click on a sensor opens two popups</td>
+<td>The general click handler must return early when a sensor was hit</td>
+</tr>
+<tr>
+<td><code>addProtocol</code> error when you come back to the map page</td>
+<td>Register the protocol only once (the <code>registered</code> flag)</td>
+</tr>
+<tr>
+<td><code>/layers/…</code> gives 404</td>
+<td>The files aren't in <code>app/static/layers/</code>: run the <code>git checkout step-9 -- app/static/layers</code> again, in the repository folder</td>
+</tr>
+</tbody>
+</table>
+<p>Compare: <code>git diff step-7 -- app/src</code>.</p>
+<details>
+<summary>📄 <code>app/src/lib/scenario.js</code> as it is at <code>step-7</code></summary>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c1">// Step 7: two static layers from a flood MODEL, next to the live SENSORS.</span>
+<span class="c1">//</span>
+<span class="c1">//   max_depth_100yr.tif         RASTER: the maximum water depth of a 100-year flood scenario,</span>
+<span class="c1">//                               one value per 10 m cell, as a Cloud-Optimized GeoTIFF.</span>
+<span class="c1">//   buildings_exposure.geojson  VECTOR: OpenStreetMap buildings with at least 0.15 m of water in</span>
+<span class="c1">//                               that scenario, and the depth at each building.</span>
+<span class="c1">//</span>
+<span class="c1">// Both are plain files in app/static/layers/, served by the web server like an image.</span>
+<span class="c1">// No tile server, no database: the browser reads only the parts it needs.</span>
+
+<span class="k">import</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nx">maplibregl</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;maplibre-gl&#39;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">cogProtocol</span><span class="p">,</span><span class="w"> </span><span class="nx">setColorFunction</span><span class="p">,</span><span class="w"> </span><span class="nx">locationValues</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;@geomatico/maplibre-cog-protocol&#39;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">waterLevel</span><span class="p">,</span><span class="w"> </span><span class="nx">LEVELS</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/sensors.js&#39;</span><span class="p">;</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">FLOOD_URL</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nx">location</span><span class="p">.</span><span class="nx">origin</span><span class="si">}</span><span class="sb">/layers/max_depth_100yr.tif`</span><span class="p">;</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">BUILDINGS_URL</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;/layers/buildings_exposure.geojson&#39;</span><span class="p">;</span>
+
+<span class="c1">// Depth classes for the raster, light to dark blue. [from (m), colour]</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">DEPTH_CLASSES</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+<span class="w">	</span><span class="p">[</span><span class="mf">0.05</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#c6dbef&#39;</span><span class="p">],</span>
+<span class="w">	</span><span class="p">[</span><span class="mf">0.15</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#9ecae1&#39;</span><span class="p">],</span>
+<span class="w">	</span><span class="p">[</span><span class="mf">0.3</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#6baed6&#39;</span><span class="p">],</span>
+<span class="w">	</span><span class="p">[</span><span class="mf">0.5</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#3182bd&#39;</span><span class="p">],</span>
+<span class="w">	</span><span class="p">[</span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#08519c&#39;</span><span class="p">],</span>
+<span class="w">	</span><span class="p">[</span><span class="mf">2</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#08306b&#39;</span><span class="p">]</span>
+<span class="p">];</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">RGB</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">DEPTH_CLASSES</span><span class="p">.</span><span class="nx">map</span><span class="p">(([</span><span class="kr">from</span><span class="p">,</span><span class="w"> </span><span class="nx">hex</span><span class="p">])</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">[</span><span class="kr">from</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="mf">3</span><span class="p">,</span><span class="w"> </span><span class="mf">5</span><span class="p">].</span><span class="nx">map</span><span class="p">((</span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nb">parseInt</span><span class="p">(</span><span class="nx">hex</span><span class="p">.</span><span class="nx">slice</span><span class="p">(</span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mf">2</span><span class="p">),</span><span class="w"> </span><span class="mf">16</span><span class="p">))]);</span>
+
+<span class="c1">// Called for EVERY pixel of every tile, so keep it simple and fast.</span>
+<span class="kd">function</span><span class="w"> </span><span class="nx">colourDepth</span><span class="p">([</span><span class="nx">depth</span><span class="p">],</span><span class="w"> </span><span class="nx">colour</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="p">(</span><span class="nx">depth</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">DEPTH_CLASSES</span><span class="p">[</span><span class="mf">0</span><span class="p">][</span><span class="mf">0</span><span class="p">]))</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">colour</span><span class="p">.</span><span class="nx">set</span><span class="p">([</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">0</span><span class="p">]);</span><span class="w"> </span><span class="c1">// dry, or no data (NaN): transparent</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">rgb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">RGB</span><span class="p">[</span><span class="mf">0</span><span class="p">][</span><span class="mf">1</span><span class="p">];</span>
+<span class="w">	</span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="kr">from</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">]</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">RGB</span><span class="p">)</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">depth</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="kr">from</span><span class="p">)</span><span class="w"> </span><span class="nx">rgb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">c</span><span class="p">;</span>
+<span class="w">	</span><span class="nx">colour</span><span class="p">.</span><span class="nx">set</span><span class="p">([...</span><span class="nx">rgb</span><span class="p">,</span><span class="w"> </span><span class="mf">210</span><span class="p">]);</span>
+<span class="p">}</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="nx">registered</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+
+<span class="c1">// The raster. `cog://` tells MapLibre to hand the URL to the COG plugin, which reads the</span>
+<span class="c1">// GeoTIFF in the browser with HTTP range requests and turns it into map tiles.</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">addFloodDepth</span><span class="p">(</span><span class="nx">map</span><span class="p">,</span><span class="w"> </span><span class="nx">beforeId</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">registered</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nx">maplibregl</span><span class="p">.</span><span class="nx">addProtocol</span><span class="p">(</span><span class="s1">&#39;cog&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">cogProtocol</span><span class="p">);</span><span class="w"> </span><span class="c1">// once per page</span>
+<span class="w">		</span><span class="nx">setColorFunction</span><span class="p">(</span><span class="nx">FLOOD_URL</span><span class="p">,</span><span class="w"> </span><span class="nx">colourDepth</span><span class="p">);</span>
+<span class="w">		</span><span class="nx">registered</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">addSource</span><span class="p">(</span><span class="s1">&#39;flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;raster&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">url</span><span class="o">:</span><span class="w"> </span><span class="sb">`cog://</span><span class="si">${</span><span class="nx">FLOOD_URL</span><span class="si">}</span><span class="sb">`</span><span class="p">,</span><span class="w"> </span><span class="nx">tileSize</span><span class="o">:</span><span class="w"> </span><span class="mf">256</span><span class="w"> </span><span class="p">});</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">addLayer</span><span class="p">({</span><span class="w"> </span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood-depth&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;raster&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">source</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">paint</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s1">&#39;raster-opacity&#39;</span><span class="o">:</span><span class="w"> </span><span class="mf">0.8</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="nx">beforeId</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="c1">// The depth in the raster at one place (a click), read from the file, not from the picture.</span>
+<span class="c1">// Always at full resolution (zoom 16): at lower zooms the plugin reads the COG&#39;s overviews,</span>
+<span class="c1">// coarser copies of the data stored in the file for zoomed-out views, and the value can differ.</span>
+<span class="k">export</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">floodDepthAt</span><span class="p">(</span><span class="nx">lngLat</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="nx">depth</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">locationValues</span><span class="p">(</span><span class="nx">FLOOD_URL</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">latitude</span><span class="o">:</span><span class="w"> </span><span class="nx">lngLat</span><span class="p">.</span><span class="nx">lat</span><span class="p">,</span><span class="w"> </span><span class="nx">longitude</span><span class="o">:</span><span class="w"> </span><span class="nx">lngLat</span><span class="p">.</span><span class="nx">lng</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="mf">16</span><span class="p">);</span>
+<span class="w">	</span><span class="k">return</span><span class="w"> </span><span class="nb">Number</span><span class="p">.</span><span class="nb">isFinite</span><span class="p">(</span><span class="nx">depth</span><span class="p">)</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">depth</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">DEPTH_CLASSES</span><span class="p">[</span><span class="mf">0</span><span class="p">][</span><span class="mf">0</span><span class="p">]</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="nx">depth</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">// The vector layer: building outlines, coloured with the SAME thresholds as the sensors (step 3).</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">addBuildings</span><span class="p">(</span><span class="nx">map</span><span class="p">,</span><span class="w"> </span><span class="nx">beforeId</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">addSource</span><span class="p">(</span><span class="s1">&#39;buildings&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;geojson&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">data</span><span class="o">:</span><span class="w"> </span><span class="nx">BUILDINGS_URL</span><span class="w"> </span><span class="p">});</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">addLayer</span><span class="p">(</span>
+<span class="w">		</span><span class="p">{</span>
+<span class="w">			</span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;buildings-exposed&#39;</span><span class="p">,</span>
+<span class="w">			</span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;fill&#39;</span><span class="p">,</span>
+<span class="w">			</span><span class="nx">source</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;buildings&#39;</span><span class="p">,</span>
+<span class="w">			</span><span class="nx">paint</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">				</span><span class="s1">&#39;fill-color&#39;</span><span class="o">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">					</span><span class="s1">&#39;step&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;get&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;depth_m&#39;</span><span class="p">],</span>
+<span class="w">					</span><span class="nx">LEVELS</span><span class="p">.</span><span class="nx">watch</span><span class="p">.</span><span class="nx">colour</span><span class="p">,</span><span class="w"> </span><span class="mf">0.3</span><span class="p">,</span><span class="w"> </span><span class="nx">LEVELS</span><span class="p">.</span><span class="nx">warning</span><span class="p">.</span><span class="nx">colour</span><span class="p">,</span><span class="w"> </span><span class="mf">0.5</span><span class="p">,</span><span class="w"> </span><span class="nx">LEVELS</span><span class="p">.</span><span class="nx">danger</span><span class="p">.</span><span class="nx">colour</span>
+<span class="w">				</span><span class="p">],</span>
+<span class="w">				</span><span class="s1">&#39;fill-opacity&#39;</span><span class="o">:</span><span class="w"> </span><span class="mf">0.85</span>
+<span class="w">			</span><span class="p">}</span>
+<span class="w">		</span><span class="p">},</span>
+<span class="w">		</span><span class="nx">beforeId</span>
+<span class="w">	</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">buildingPopup</span><span class="p">(</span><span class="nx">p</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">level</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">waterLevel</span><span class="p">(</span><span class="nx">p</span><span class="p">.</span><span class="nx">depth_m</span><span class="p">);</span>
+<span class="w">	</span><span class="k">return</span><span class="w"> </span><span class="sb">`&lt;strong&gt;Building&lt;/strong&gt; · OpenStreetMap </span><span class="si">${</span><span class="nx">p</span><span class="p">.</span><span class="nx">osm_id</span><span class="si">}</span><span class="sb">&lt;br&gt;</span>
+<span class="sb">		Type: </span><span class="si">${</span><span class="nx">p</span><span class="p">.</span><span class="nx">use</span><span class="si">}</span><span class="sb">&lt;br&gt;</span>
+<span class="sb">		Max flood depth: &lt;strong&gt;</span><span class="si">${</span><span class="nx">p</span><span class="p">.</span><span class="nx">depth_m</span><span class="si">}</span><span class="sb"> m&lt;/strong&gt; · </span><span class="si">${</span><span class="nx">LEVELS</span><span class="p">[</span><span class="nx">level</span><span class="p">].</span><span class="nx">label</span><span class="si">}</span><span class="sb">&lt;br&gt;</span>
+<span class="sb">		&lt;small&gt;100-year scenario. Exposure, not damage.&lt;/small&gt;`</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+</details>
+<details>
+<summary>📄 <code>app/src/lib/layers.svelte.js</code> as it is at <code>step-7</code></summary>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c1">// Step 5: the information layers you can switch on and off.</span>
+<span class="c1">//</span>
+<span class="c1">// Every map page shows the same list, and the choice is shared: switch the sensors off on</span>
+<span class="c1">// one map page, open another, and they are off there too.</span>
+<span class="c1">//</span>
+<span class="c1">// To add a layer: add an entry here, then teach each map component to draw it</span>
+<span class="c1">// (and to hide it when `visible` is false).</span>
+<span class="c1">//</span>
+<span class="c1">// Step 7: two layers from a flood scenario. They start switched off, and their data is only</span>
+<span class="c1">// downloaded the first time you switch them on. Drawn on the MapLibre page only.</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">layers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">({</span>
+<span class="w">	</span><span class="nx">sensors</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Water-level sensors (live)&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visible</span><span class="o">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nx">legend</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;levels&#39;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">	</span><span class="nx">buildings</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Buildings exposed, 100-year flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visible</span><span class="o">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nx">legend</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;exposure&#39;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">	</span><span class="nx">flood</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Max flood depth, 100-year flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visible</span><span class="o">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nx">legend</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;depth&#39;</span><span class="w"> </span><span class="p">}</span>
+<span class="p">});</span>
+</code></pre></div>
+</details>
+<details>
+<summary>🔍 What changed in <code>app/src/lib/MapLibreMap.svelte</code> from <code>step-6</code> to <code>step-7</code></summary>
+<div class="code" data-lang="diff"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="gd">--- a/app/src/lib/MapLibreMap.svelte</span>
+<span class="gi">+++ b/app/src/lib/MapLibreMap.svelte</span>
+<span class="gu">@@ -4,4 +4,5 @@</span>
+<span class="w"> </span>	import &#39;maplibre-gl/dist/maplibre-gl.css&#39;;
+<span class="w"> </span>	import SensorDetail from &#39;#lib/SensorDetail.svelte&#39;;
+<span class="gi">+	import { addFloodDepth, addBuildings, floodDepthAt, buildingPopup } from &#39;#lib/scenario.js&#39;;</span>
+<span class="w"> </span>
+<span class="w"> </span>	// Step 2: the sensors on a 2D web map with MapLibre GL.
+<span class="gu">@@ -82,4 +83,19 @@</span>
+<span class="w"> </span>			m.on(&#39;mouseleave&#39;, &#39;sensor-dots&#39;, () =&gt; (m.getCanvas().style.cursor = &#39;&#39;));
+<span class="w"> </span>
+<span class="gi">+			// Step 7: a click that misses the sensors: a building? Otherwise the flood depth there.</span>
+<span class="gi">+			m.on(&#39;click&#39;, async (e) =&gt; {</span>
+<span class="gi">+				if (m.queryRenderedFeatures(e.point, { layers: [&#39;sensor-dots&#39;] }).length) return; // handled above</span>
+<span class="gi">+				const building = m.getLayer(&#39;buildings-exposed&#39;)</span>
+<span class="gi">+					? m.queryRenderedFeatures(e.point, { layers: [&#39;buildings-exposed&#39;] })[0]</span>
+<span class="gi">+					: null;</span>
+<span class="gi">+				if (building) {</span>
+<span class="gi">+					new maplibregl.Popup().setLngLat(e.lngLat).setHTML(buildingPopup(building.properties)).addTo(m);</span>
+<span class="gi">+				} else if (layers.flood.visible) {</span>
+<span class="gi">+					const depth = await floodDepthAt(e.lngLat);</span>
+<span class="gi">+					const text = depth == null ? &#39;Dry in this scenario&#39; : `Max flood depth: &lt;strong&gt;${depth.toFixed(2)} m&lt;/strong&gt;`;</span>
+<span class="gi">+					new maplibregl.Popup().setLngLat(e.lngLat).setHTML(`${text}&lt;br&gt;&lt;small&gt;100-year scenario&lt;/small&gt;`).addTo(m);</span>
+<span class="gi">+				}</span>
+<span class="gi">+			});</span>
+<span class="gi">+</span>
+<span class="w"> </span>			map = m;
+<span class="w"> </span>		});
+<span class="gu">@@ -98,4 +114,19 @@</span>
+<span class="w"> </span>		for (const id of [&#39;sensor-dots&#39;, &#39;sensor-labels&#39;]) map?.setLayoutProperty(id, &#39;visibility&#39;, visibility);
+<span class="w"> </span>	});
+<span class="gi">+</span>
+<span class="gi">+	// Step 7: the scenario layers. Added the first time they are switched on (so nobody downloads</span>
+<span class="gi">+	// them who doesn&#39;t look at them), then only shown and hidden.</span>
+<span class="gi">+	// They go UNDER the basemap&#39;s labels, so street names stay readable on top of the water.</span>
+<span class="gi">+	$effect(() =&gt; {</span>
+<span class="gi">+		if (!map) return;</span>
+<span class="gi">+		const underLabels = map.getStyle().layers.find((l) =&gt; l.type === &#39;symbol&#39;)?.id;</span>
+<span class="gi">+		// The raster always goes below the buildings, whichever is switched on first.</span>
+<span class="gi">+		const underBuildings = map.getLayer(&#39;buildings-exposed&#39;) ? &#39;buildings-exposed&#39; : underLabels;</span>
+<span class="gi">+		if (layers.flood.visible &amp;&amp; !map.getLayer(&#39;flood-depth&#39;)) addFloodDepth(map, underBuildings);</span>
+<span class="gi">+		if (layers.buildings.visible &amp;&amp; !map.getLayer(&#39;buildings-exposed&#39;)) addBuildings(map, underLabels);</span>
+<span class="gi">+		for (const [id, on] of [[&#39;flood-depth&#39;, layers.flood.visible], [&#39;buildings-exposed&#39;, layers.buildings.visible]]) {</span>
+<span class="gi">+			if (map.getLayer(id)) map.setLayoutProperty(id, &#39;visibility&#39;, on ? &#39;visible&#39; : &#39;none&#39;);</span>
+<span class="gi">+		}</span>
+<span class="gi">+	});</span>
+<span class="w"> </span>&lt;/script&gt;
+</code></pre></div>
+</details>
+<details>
+<summary>🔍 What changed in <code>app/src/lib/LayerPanel.svelte</code> from <code>step-6</code> to <code>step-7</code></summary>
+<div class="code" data-lang="diff"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="gd">--- a/app/src/lib/LayerPanel.svelte</span>
+<span class="gi">+++ b/app/src/lib/LayerPanel.svelte</span>
+<span class="gu">@@ -2,6 +2,9 @@</span>
+<span class="w"> </span>	import { layers } from &#39;#lib/layers.svelte.js&#39;;
+<span class="w"> </span>	import { LEVELS } from &#39;#lib/sensors.js&#39;;
+<span class="gi">+	import { DEPTH_CLASSES } from &#39;#lib/scenario.js&#39;;</span>
+<span class="w"> </span>
+<span class="w"> </span>	// Step 5: switch information layers on and off. Floats over the top-left of every map page.
+<span class="gi">+	// Step 7: `supported` lists the layers this page can draw; the others are greyed out.</span>
+<span class="gi">+	let { supported = Object.keys(layers) } = $props();</span>
+<span class="w"> </span>	let open = $state(true);
+<span class="w"> </span>&lt;/script&gt;
+<span class="gu">@@ -14,9 +17,10 @@</span>
+<span class="w"> </span>	{#if open}
+<span class="w"> </span>		{#each Object.entries(layers) as [id, layer] (id)}
+<span class="gd">-			&lt;label&gt;</span>
+<span class="gd">-				&lt;input type=&quot;checkbox&quot; bind:checked={layer.visible} /&gt;</span>
+<span class="gi">+			{@const ok = supported.includes(id)}</span>
+<span class="gi">+			&lt;label class:off={!ok} title={ok ? &#39;&#39; : &#39;Only on the MapLibre page&#39;}&gt;</span>
+<span class="gi">+				&lt;input type=&quot;checkbox&quot; bind:checked={layer.visible} disabled={!ok} /&gt;</span>
+<span class="w"> </span>				{layer.label}
+<span class="w"> </span>			&lt;/label&gt;
+<span class="gd">-			{#if layer.visible &amp;&amp; layer.legend === &#39;levels&#39;}</span>
+<span class="gi">+			{#if ok &amp;&amp; layer.visible &amp;&amp; layer.legend === &#39;levels&#39;}</span>
+<span class="w"> </span>				&lt;ul class=&quot;legend&quot;&gt;
+<span class="w"> </span>					{#each Object.entries(LEVELS) as [key, l] (key)}
+<span class="gu">@@ -24,4 +28,18 @@</span>
+<span class="w"> </span>					{/each}
+<span class="w"> </span>				&lt;/ul&gt;
+<span class="gi">+			{:else if ok &amp;&amp; layer.visible &amp;&amp; layer.legend === &#39;exposure&#39;}</span>
+<span class="gi">+				&lt;ul class=&quot;legend&quot;&gt;</span>
+<span class="gi">+					&lt;li&gt;&lt;i class=&quot;sq&quot; style:background={LEVELS.watch.colour}&gt;&lt;/i&gt;0.15 – 0.30 m&lt;/li&gt;</span>
+<span class="gi">+					&lt;li&gt;&lt;i class=&quot;sq&quot; style:background={LEVELS.warning.colour}&gt;&lt;/i&gt;0.30 – 0.50 m&lt;/li&gt;</span>
+<span class="gi">+					&lt;li&gt;&lt;i class=&quot;sq&quot; style:background={LEVELS.danger.colour}&gt;&lt;/i&gt;0.50 m and more&lt;/li&gt;</span>
+<span class="gi">+				&lt;/ul&gt;</span>
+<span class="gi">+			{:else if ok &amp;&amp; layer.visible &amp;&amp; layer.legend === &#39;depth&#39;}</span>
+<span class="gi">+				&lt;ul class=&quot;legend&quot;&gt;</span>
+<span class="gi">+					{#each DEPTH_CLASSES as [from, colour], i (from)}</span>
+<span class="gi">+						&lt;li&gt;</span>
+<span class="gi">+							&lt;i class=&quot;sq&quot; style:background={colour}&gt;&lt;/i&gt;{from}{i &lt; DEPTH_CLASSES.length - 1 ? ` – ${DEPTH_CLASSES[i + 1][0]}` : &#39; and more&#39;} m</span>
+<span class="gi">+						&lt;/li&gt;</span>
+<span class="gi">+					{/each}</span>
+<span class="gi">+				&lt;/ul&gt;</span>
+<span class="w"> </span>			{/if}
+<span class="w"> </span>		{/each}
+<span class="gu">@@ -61,4 +79,11 @@</span>
+<span class="w"> </span>		font-size: 0.8rem;
+<span class="w"> </span>	}
+<span class="gi">+	label.off {</span>
+<span class="gi">+		color: #999;</span>
+<span class="gi">+		cursor: default;</span>
+<span class="gi">+	}</span>
+<span class="gi">+	i.sq {</span>
+<span class="gi">+		border-radius: 2px;</span>
+<span class="gi">+	}</span>
+<span class="w"> </span>	i {
+<span class="w"> </span>		display: inline-block;
+</code></pre></div>
+</details>
+<details>
+<summary>🔍 What changed in <code>app/src/lib/MapPage.svelte</code> from <code>step-6</code> to <code>step-7</code></summary>
+<div class="code" data-lang="diff"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="gd">--- a/app/src/lib/MapPage.svelte</span>
+<span class="gi">+++ b/app/src/lib/MapPage.svelte</span>
+<span class="gu">@@ -5,5 +5,6 @@</span>
+<span class="w"> </span>	// Step 5: the frame shared by every map page: the map fills the space, the layer panel
+<span class="w"> </span>	// floats on top, and the map goes grey when the feed is lost (step 4).
+<span class="gd">-	let { children } = $props();</span>
+<span class="gi">+	// `supported`: which information layers this page can draw (step 7).</span>
+<span class="gi">+	let { children, supported } = $props();</span>
+<span class="w"> </span>&lt;/script&gt;
+<span class="w"> </span>
+<span class="gu">@@ -12,5 +13,5 @@</span>
+<span class="w"> </span>		{@render children()}
+<span class="w"> </span>	&lt;/div&gt;
+<span class="gd">-	&lt;LayerPanel /&gt;</span>
+<span class="gi">+	&lt;LayerPanel {supported} /&gt;</span>
+<span class="w"> </span>&lt;/div&gt;
+</code></pre></div>
+</details>
+<h2 id="going-further-make-the-web-raster-yourself">Going further: make the web raster yourself</h2>
+<p><code>data/flood/max_depth_100yr_utm.tif</code> is the same maximum depth on the model's own grid (UTM zone 44N, every value kept). The web version was made from it with <strong>GDAL</strong>, the standard toolbox for rasters. To try it, install GDAL (<code>conda install -c conda-forge gdal</code> on your laptop, or <code>sudo apt-get install -y gdal-bin</code> in a Codespace), then in the repository folder:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>gdalwarp<span class="w"> </span>-t_srs<span class="w"> </span>EPSG:3857<span class="w"> </span>-r<span class="w"> </span>near<span class="w"> </span>-et<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-of<span class="w"> </span>COG<span class="w"> </span>-co<span class="w"> </span><span class="nv">TILING_SCHEME</span><span class="o">=</span>GoogleMapsCompatible<span class="w"> </span>-co<span class="w"> </span><span class="nv">COMPRESS</span><span class="o">=</span>DEFLATE<span class="w"> </span>-co<span class="w"> </span><span class="nv">PREDICTOR</span><span class="o">=</span>YES<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>data/flood/max_depth_100yr_utm.tif<span class="w"> </span>app/static/layers/my_max_depth.tif
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-t_srs EPSG:3857</code></td>
+<td>Reproject to Web Mercator, the projection of web maps</td>
+</tr>
+<tr>
+<td><code>-r near</code></td>
+<td>Nearest neighbour: never invent depths by averaging wet and dry cells</td>
+</tr>
+<tr>
+<td><code>-et 0</code></td>
+<td>Exact reprojection, no approximation</td>
+</tr>
+<tr>
+<td><code>-of COG -co TILING_SCHEME=GoogleMapsCompatible</code></td>
+<td>A Cloud-Optimized GeoTIFF whose tiles line up with the map's tiles</td>
+</tr>
+<tr>
+<td><code>-co COMPRESS=DEFLATE -co PREDICTOR=YES</code></td>
+<td>Smaller file, no loss</td>
+</tr>
+</tbody>
+</table>
+<p>Point <code>FLOOD_URL</code> at <code>my_max_depth.tif</code>. What's different from ours? (Ours is also rounded to the centimetre and has every cell below 0.05 m removed. Compare the file sizes.)</p>
+<p><strong>Why it was done this way, things to try, questions:</strong> <a href="https://github.com/AlpinistPanda/flood-twin-lab/blob/main/STEPS.md#step-7--a-flood-scenario-one-raster-one-vector--step-7">STEPS.md, step 7</a>.</p>
+<hr />
+<h2 id="walkthrough-step-7-in-small-pieces-with-all-the-code">Walkthrough: step 7 in small pieces, with all the code</h2>
+<h3 id="7a--the-files-are-there">7.A · The files are there</h3>
+<p>In the repository folder:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>git<span class="w"> </span>checkout<span class="w"> </span>step-9<span class="w"> </span>--<span class="w"> </span>app/static/layers
+ls<span class="w"> </span>-lh<span class="w"> </span>app/static/layers
+</code></pre></div>
+<p><strong>You see:</strong> four files. With the dev server running, open port 5173 with <code>/layers/depth_timeseries_100yr.json</code> added to the address: the JSON appears. Files in <code>static/</code> are served as they are.</p>
+<h3 id="7b--install-the-cog-plugin">7.B · Install the COG plugin</h3>
+<p>In <code>app/</code> (stop the dev server first, start it again after):</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>npm<span class="w"> </span>install<span class="w"> </span>@geomatico/maplibre-cog-protocol@0.10.0
+</code></pre></div>
+<h3 id="7c--the-raster-on-the-map-as-simply-as-possible">7.C · The raster on the map, as simply as possible</h3>
+<p>Create <strong><code>app/src/lib/scenario.js</code></strong> with only this:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">import</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nx">maplibregl</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;maplibre-gl&#39;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">cogProtocol</span><span class="p">,</span><span class="w"> </span><span class="nx">setColorFunction</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;@geomatico/maplibre-cog-protocol&#39;</span><span class="p">;</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">FLOOD_URL</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nx">location</span><span class="p">.</span><span class="nx">origin</span><span class="si">}</span><span class="sb">/layers/max_depth_100yr.tif`</span><span class="p">;</span>
+
+<span class="c1">// For now: every wet pixel the same blue, everything else transparent.</span>
+<span class="kd">function</span><span class="w"> </span><span class="nx">colourDepth</span><span class="p">([</span><span class="nx">depth</span><span class="p">],</span><span class="w"> </span><span class="nx">colour</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">depth</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0</span><span class="p">)</span><span class="w"> </span><span class="nx">colour</span><span class="p">.</span><span class="nx">set</span><span class="p">([</span><span class="mf">49</span><span class="p">,</span><span class="w"> </span><span class="mf">130</span><span class="p">,</span><span class="w"> </span><span class="mf">189</span><span class="p">,</span><span class="w"> </span><span class="mf">200</span><span class="p">]);</span>
+<span class="w">	</span><span class="k">else</span><span class="w"> </span><span class="nx">colour</span><span class="p">.</span><span class="nx">set</span><span class="p">([</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">0</span><span class="p">]);</span>
+<span class="p">}</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">addFloodDepth</span><span class="p">(</span><span class="nx">map</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="nx">maplibregl</span><span class="p">.</span><span class="nx">addProtocol</span><span class="p">(</span><span class="s1">&#39;cog&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">cogProtocol</span><span class="p">);</span>
+<span class="w">	</span><span class="nx">setColorFunction</span><span class="p">(</span><span class="nx">FLOOD_URL</span><span class="p">,</span><span class="w"> </span><span class="nx">colourDepth</span><span class="p">);</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">addSource</span><span class="p">(</span><span class="s1">&#39;flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;raster&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">url</span><span class="o">:</span><span class="w"> </span><span class="sb">`cog://</span><span class="si">${</span><span class="nx">FLOOD_URL</span><span class="si">}</span><span class="sb">`</span><span class="p">,</span><span class="w"> </span><span class="nx">tileSize</span><span class="o">:</span><span class="w"> </span><span class="mf">256</span><span class="w"> </span><span class="p">});</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">addLayer</span><span class="p">({</span><span class="w"> </span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood-depth&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;raster&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">source</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">paint</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s1">&#39;raster-opacity&#39;</span><span class="o">:</span><span class="w"> </span><span class="mf">0.8</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">});</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>In <code>MapLibreMap.svelte</code>, import it (<code>import { addFloodDepth } from '#lib/scenario.js';</code>), and call it for a moment at the start of <code>on('load')</code>, before the sensor source:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">			</span><span class="nx">addFloodDepth</span><span class="p">(</span><span class="nx">m</span><span class="p">);</span><span class="w"> </span><span class="c1">// temporary: always on</span>
+</code></pre></div>
+<p><strong>You see:</strong> blue areas along the water courses, under the sensor dots. <strong>Network</strong> tab: several requests for <code>max_depth_100yr.tif</code>, with status <strong>206</strong>. That's the plugin reading pieces of one file.</p>
+<p>Two problems to fix next: everything is the same blue, and the water covers the street names.</p>
+<h3 id="7d--depth-classes">7.D · Depth classes</h3>
+<p>Replace the colour function in <code>scenario.js</code> with classes:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c1">// Depth classes for the raster, light to dark blue. [from (m), colour]</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">DEPTH_CLASSES</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+<span class="w">	</span><span class="p">[</span><span class="mf">0.05</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#c6dbef&#39;</span><span class="p">],</span>
+<span class="w">	</span><span class="p">[</span><span class="mf">0.15</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#9ecae1&#39;</span><span class="p">],</span>
+<span class="w">	</span><span class="p">[</span><span class="mf">0.3</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#6baed6&#39;</span><span class="p">],</span>
+<span class="w">	</span><span class="p">[</span><span class="mf">0.5</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#3182bd&#39;</span><span class="p">],</span>
+<span class="w">	</span><span class="p">[</span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#08519c&#39;</span><span class="p">],</span>
+<span class="w">	</span><span class="p">[</span><span class="mf">2</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;#08306b&#39;</span><span class="p">]</span>
+<span class="p">];</span>
+<span class="c1">// The hex colours as [r, g, b] numbers, worked out once, not for every pixel.</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">RGB</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">DEPTH_CLASSES</span><span class="p">.</span><span class="nx">map</span><span class="p">(([</span><span class="kr">from</span><span class="p">,</span><span class="w"> </span><span class="nx">hex</span><span class="p">])</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">[</span><span class="kr">from</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="mf">3</span><span class="p">,</span><span class="w"> </span><span class="mf">5</span><span class="p">].</span><span class="nx">map</span><span class="p">((</span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nb">parseInt</span><span class="p">(</span><span class="nx">hex</span><span class="p">.</span><span class="nx">slice</span><span class="p">(</span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mf">2</span><span class="p">),</span><span class="w"> </span><span class="mf">16</span><span class="p">))]);</span>
+
+<span class="c1">// Called for EVERY pixel of every tile, so keep it simple and fast.</span>
+<span class="kd">function</span><span class="w"> </span><span class="nx">colourDepth</span><span class="p">([</span><span class="nx">depth</span><span class="p">],</span><span class="w"> </span><span class="nx">colour</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="p">(</span><span class="nx">depth</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">DEPTH_CLASSES</span><span class="p">[</span><span class="mf">0</span><span class="p">][</span><span class="mf">0</span><span class="p">]))</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">colour</span><span class="p">.</span><span class="nx">set</span><span class="p">([</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">0</span><span class="p">]);</span><span class="w"> </span><span class="c1">// dry, or no data (NaN): transparent</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">rgb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">RGB</span><span class="p">[</span><span class="mf">0</span><span class="p">][</span><span class="mf">1</span><span class="p">];</span>
+<span class="w">	</span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="kr">from</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">]</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">RGB</span><span class="p">)</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">depth</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="kr">from</span><span class="p">)</span><span class="w"> </span><span class="nx">rgb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">c</span><span class="p">;</span>
+<span class="w">	</span><span class="nx">colour</span><span class="p">.</span><span class="nx">set</span><span class="p">([...</span><span class="nx">rgb</span><span class="p">,</span><span class="w"> </span><span class="mf">210</span><span class="p">]);</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>You see:</strong> light blue at the edges of the flood, dark blue where it's deep.</p>
+<h3 id="7e--under-the-street-names">7.E · Under the street names</h3>
+<p>MapLibre draws layers in the order they're added. Give <code>addFloodDepth</code> a second parameter and pass it to <code>addLayer</code>, so the raster goes <strong>under</strong> that layer:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">addFloodDepth</span><span class="p">(</span><span class="nx">map</span><span class="p">,</span><span class="w"> </span><span class="nx">beforeId</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="err">…</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">addLayer</span><span class="p">({</span><span class="w"> </span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood-depth&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;raster&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">source</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">paint</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s1">&#39;raster-opacity&#39;</span><span class="o">:</span><span class="w"> </span><span class="mf">0.8</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="nx">beforeId</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>In <code>on('load')</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">			</span><span class="kd">const</span><span class="w"> </span><span class="nx">underLabels</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">getStyle</span><span class="p">().</span><span class="nx">layers</span><span class="p">.</span><span class="nx">find</span><span class="p">((</span><span class="nx">l</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">l</span><span class="p">.</span><span class="nx">type</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;symbol&#39;</span><span class="p">)</span><span class="o">?</span><span class="p">.</span><span class="nx">id</span><span class="p">;</span><span class="w"> </span><span class="c1">// the basemap&#39;s first label layer</span>
+<span class="w">			</span><span class="nx">addFloodDepth</span><span class="p">(</span><span class="nx">m</span><span class="p">,</span><span class="w"> </span><span class="nx">underLabels</span><span class="p">);</span><span class="w"> </span><span class="c1">// temporary: always on</span>
+</code></pre></div>
+<p><strong>You see:</strong> street names on top of the water again.</p>
+<h3 id="7f--a-switch-in-the-layers-box">7.F · A switch in the Layers box</h3>
+<p>Add the layer to <code>layers.svelte.js</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">layers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">({</span>
+<span class="w">	</span><span class="nx">sensors</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Water-level sensors (live)&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visible</span><span class="o">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nx">legend</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;levels&#39;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">	</span><span class="nx">flood</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Max flood depth, 100-year flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visible</span><span class="o">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nx">legend</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;depth&#39;</span><span class="w"> </span><span class="p">}</span>
+<span class="p">});</span>
+</code></pre></div>
+<p>Remove the two temporary lines from <code>on('load')</code>. Instead, a new <code>$effect</code> at the end of the script adds the layer the first time it is switched on, and after that only shows and hides it:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="c1">// The scenario layers: added the first time they are switched on (so nobody downloads</span>
+<span class="w">	</span><span class="c1">// them who doesn&#39;t look at them), then only shown and hidden.</span>
+<span class="w">	</span><span class="nx">$effect</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">map</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="p">;</span>
+<span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="nx">underLabels</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">map</span><span class="p">.</span><span class="nx">getStyle</span><span class="p">().</span><span class="nx">layers</span><span class="p">.</span><span class="nx">find</span><span class="p">((</span><span class="nx">l</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">l</span><span class="p">.</span><span class="nx">type</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;symbol&#39;</span><span class="p">)</span><span class="o">?</span><span class="p">.</span><span class="nx">id</span><span class="p">;</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">layers</span><span class="p">.</span><span class="nx">flood</span><span class="p">.</span><span class="nx">visible</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">!</span><span class="nx">map</span><span class="p">.</span><span class="nx">getLayer</span><span class="p">(</span><span class="s1">&#39;flood-depth&#39;</span><span class="p">))</span><span class="w"> </span><span class="nx">addFloodDepth</span><span class="p">(</span><span class="nx">map</span><span class="p">,</span><span class="w"> </span><span class="nx">underLabels</span><span class="p">);</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">map</span><span class="p">.</span><span class="nx">getLayer</span><span class="p">(</span><span class="s1">&#39;flood-depth&#39;</span><span class="p">))</span><span class="w"> </span><span class="nx">map</span><span class="p">.</span><span class="nx">setLayoutProperty</span><span class="p">(</span><span class="s1">&#39;flood-depth&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;visibility&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">layers</span><span class="p">.</span><span class="nx">flood</span><span class="p">.</span><span class="nx">visible</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;visible&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;none&#39;</span><span class="p">);</span>
+<span class="w">	</span><span class="p">});</span>
+</code></pre></div>
+<p><code>addProtocol</code> may only run once per page, but now <code>addFloodDepth</code> can run again when you come back to the map page. Guard it in <code>scenario.js</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="kd">let</span><span class="w"> </span><span class="nx">registered</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">addFloodDepth</span><span class="p">(</span><span class="nx">map</span><span class="p">,</span><span class="w"> </span><span class="nx">beforeId</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">registered</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nx">maplibregl</span><span class="p">.</span><span class="nx">addProtocol</span><span class="p">(</span><span class="s1">&#39;cog&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">cogProtocol</span><span class="p">);</span><span class="w"> </span><span class="c1">// once per page</span>
+<span class="w">		</span><span class="nx">setColorFunction</span><span class="p">(</span><span class="nx">FLOOD_URL</span><span class="p">,</span><span class="w"> </span><span class="nx">colourDepth</span><span class="p">);</span>
+<span class="w">		</span><span class="nx">registered</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">addSource</span><span class="p">(</span><span class="s1">&#39;flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;raster&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">url</span><span class="o">:</span><span class="w"> </span><span class="sb">`cog://</span><span class="si">${</span><span class="nx">FLOOD_URL</span><span class="si">}</span><span class="sb">`</span><span class="p">,</span><span class="w"> </span><span class="nx">tileSize</span><span class="o">:</span><span class="w"> </span><span class="mf">256</span><span class="w"> </span><span class="p">});</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">addLayer</span><span class="p">({</span><span class="w"> </span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood-depth&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;raster&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">source</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">paint</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s1">&#39;raster-opacity&#39;</span><span class="o">:</span><span class="w"> </span><span class="mf">0.8</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="nx">beforeId</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>You see:</strong> a second checkbox in the Layers box. The flood appears only when you tick it, and the <code>.tif</code> requests start only then.</p>
+<h3 id="7g--the-legend-for-depths">7.G · The legend for depths</h3>
+<p>In <code>LayerPanel.svelte</code>, import the classes (<code>import { DEPTH_CLASSES } from '#lib/scenario.js';</code>) and, after the <code>levels</code> legend (turn its <code>{/if}</code> into the next branch):</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>			{:else if layer.visible <span class="err">&amp;&amp;</span> layer.legend === &#39;depth&#39;}
+				<span class="p">&lt;</span><span class="nt">ul</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;legend&quot;</span><span class="p">&gt;</span>
+					{#each DEPTH_CLASSES as [from, colour], i (from)}
+						<span class="p">&lt;</span><span class="nt">li</span><span class="p">&gt;</span>
+							<span class="p">&lt;</span><span class="nt">i</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;sq&quot;</span> <span class="na">style:background</span><span class="o">=</span><span class="s">{colour}</span><span class="p">&gt;&lt;/</span><span class="nt">i</span><span class="p">&gt;</span>{from}{i <span class="p">&lt;</span> <span class="nt">DEPTH_CLASSES.length</span> <span class="na">-</span> <span class="na">1</span> <span class="err">?</span> <span class="err">`</span> <span class="err">–</span> <span class="err">${</span><span class="na">DEPTH_CLASSES</span><span class="err">[</span><span class="na">i</span> <span class="err">+</span> <span class="na">1</span><span class="err">][</span><span class="na">0</span><span class="err">]}`</span> <span class="na">:</span> <span class="err">&#39;</span> <span class="na">and</span> <span class="na">more</span><span class="err">&#39;}</span> <span class="na">m</span>
+						<span class="err">&lt;/</span><span class="na">li</span><span class="p">&gt;</span>
+					{/each}
+				<span class="p">&lt;/</span><span class="nt">ul</span><span class="p">&gt;</span>
+			{/if}
+</code></pre></div>
+<p>and <code>i.sq { border-radius: 2px; }</code> in the style: squares for areas, dots for sensors.</p>
+<p><strong>You see:</strong> six depth classes under the flood switch when it's on.</p>
+<h3 id="7h--click-the-depth-from-the-file">7.H · Click: the depth from the file</h3>
+<p>In <code>scenario.js</code>, import <code>locationValues</code> too, and add:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c1">// The depth in the raster at one place, read from the file, not from the picture.</span>
+<span class="c1">// Always at full resolution (zoom 16), not from a coarser overview.</span>
+<span class="k">export</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">floodDepthAt</span><span class="p">(</span><span class="nx">lngLat</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="nx">depth</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">locationValues</span><span class="p">(</span><span class="nx">FLOOD_URL</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">latitude</span><span class="o">:</span><span class="w"> </span><span class="nx">lngLat</span><span class="p">.</span><span class="nx">lat</span><span class="p">,</span><span class="w"> </span><span class="nx">longitude</span><span class="o">:</span><span class="w"> </span><span class="nx">lngLat</span><span class="p">.</span><span class="nx">lng</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="mf">16</span><span class="p">);</span>
+<span class="w">	</span><span class="k">return</span><span class="w"> </span><span class="nb">Number</span><span class="p">.</span><span class="nb">isFinite</span><span class="p">(</span><span class="nx">depth</span><span class="p">)</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">depth</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">DEPTH_CLASSES</span><span class="p">[</span><span class="mf">0</span><span class="p">][</span><span class="mf">0</span><span class="p">]</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="nx">depth</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>In <code>MapLibreMap.svelte</code>, import <code>floodDepthAt</code> too, and in <code>on('load')</code>, after the sensor click:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">			</span><span class="c1">// A click that misses the sensors: the flood depth there.</span>
+<span class="w">			</span><span class="nx">m</span><span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="s1">&#39;click&#39;</span><span class="p">,</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="p">(</span><span class="nx">e</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">				</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">m</span><span class="p">.</span><span class="nx">queryRenderedFeatures</span><span class="p">(</span><span class="nx">e</span><span class="p">.</span><span class="nx">point</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">layers</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;sensor-dots&#39;</span><span class="p">]</span><span class="w"> </span><span class="p">}).</span><span class="nx">length</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="p">;</span><span class="w"> </span><span class="c1">// handled above</span>
+<span class="w">				</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">layers</span><span class="p">.</span><span class="nx">flood</span><span class="p">.</span><span class="nx">visible</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">					</span><span class="kd">const</span><span class="w"> </span><span class="nx">depth</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">floodDepthAt</span><span class="p">(</span><span class="nx">e</span><span class="p">.</span><span class="nx">lngLat</span><span class="p">);</span>
+<span class="w">					</span><span class="kd">const</span><span class="w"> </span><span class="nx">text</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">depth</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;Dry in this scenario&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="sb">`Max flood depth: &lt;strong&gt;</span><span class="si">${</span><span class="nx">depth</span><span class="p">.</span><span class="nx">toFixed</span><span class="p">(</span><span class="mf">2</span><span class="p">)</span><span class="si">}</span><span class="sb"> m&lt;/strong&gt;`</span><span class="p">;</span>
+<span class="w">					</span><span class="ow">new</span><span class="w"> </span><span class="nx">maplibregl</span><span class="p">.</span><span class="nx">Popup</span><span class="p">().</span><span class="nx">setLngLat</span><span class="p">(</span><span class="nx">e</span><span class="p">.</span><span class="nx">lngLat</span><span class="p">).</span><span class="nx">setHTML</span><span class="p">(</span><span class="sb">`</span><span class="si">${</span><span class="nx">text</span><span class="si">}</span><span class="sb">&lt;br&gt;&lt;small&gt;100-year scenario&lt;/small&gt;`</span><span class="p">).</span><span class="nx">addTo</span><span class="p">(</span><span class="nx">m</span><span class="p">);</span>
+<span class="w">				</span><span class="p">}</span>
+<span class="w">			</span><span class="p">});</span>
+</code></pre></div>
+<p><strong>You see:</strong> click in the blue: <em>Max flood depth: 0.84 m</em>. Away from it: <em>Dry in this scenario</em>. On a sensor: only the sensor popup.</p>
+<h3 id="7i--the-buildings">7.I · The buildings</h3>
+<p>In <code>scenario.js</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">waterLevel</span><span class="p">,</span><span class="w"> </span><span class="nx">LEVELS</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/sensors.js&#39;</span><span class="p">;</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">BUILDINGS_URL</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;/layers/buildings_exposure.geojson&#39;</span><span class="p">;</span>
+
+<span class="c1">// The vector layer: building outlines, coloured with the SAME thresholds as the sensors.</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">addBuildings</span><span class="p">(</span><span class="nx">map</span><span class="p">,</span><span class="w"> </span><span class="nx">beforeId</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">addSource</span><span class="p">(</span><span class="s1">&#39;buildings&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;geojson&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">data</span><span class="o">:</span><span class="w"> </span><span class="nx">BUILDINGS_URL</span><span class="w"> </span><span class="p">});</span>
+<span class="w">	</span><span class="nx">map</span><span class="p">.</span><span class="nx">addLayer</span><span class="p">(</span>
+<span class="w">		</span><span class="p">{</span>
+<span class="w">			</span><span class="nx">id</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;buildings-exposed&#39;</span><span class="p">,</span>
+<span class="w">			</span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;fill&#39;</span><span class="p">,</span>
+<span class="w">			</span><span class="nx">source</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;buildings&#39;</span><span class="p">,</span>
+<span class="w">			</span><span class="nx">paint</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">				</span><span class="s1">&#39;fill-color&#39;</span><span class="o">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">					</span><span class="s1">&#39;step&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;get&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;depth_m&#39;</span><span class="p">],</span>
+<span class="w">					</span><span class="nx">LEVELS</span><span class="p">.</span><span class="nx">watch</span><span class="p">.</span><span class="nx">colour</span><span class="p">,</span><span class="w"> </span><span class="mf">0.3</span><span class="p">,</span><span class="w"> </span><span class="nx">LEVELS</span><span class="p">.</span><span class="nx">warning</span><span class="p">.</span><span class="nx">colour</span><span class="p">,</span><span class="w"> </span><span class="mf">0.5</span><span class="p">,</span><span class="w"> </span><span class="nx">LEVELS</span><span class="p">.</span><span class="nx">danger</span><span class="p">.</span><span class="nx">colour</span>
+<span class="w">				</span><span class="p">],</span>
+<span class="w">				</span><span class="s1">&#39;fill-opacity&#39;</span><span class="o">:</span><span class="w"> </span><span class="mf">0.85</span>
+<span class="w">			</span><span class="p">}</span>
+<span class="w">		</span><span class="p">},</span>
+<span class="w">		</span><span class="nx">beforeId</span>
+<span class="w">	</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">buildingPopup</span><span class="p">(</span><span class="nx">p</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">level</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">waterLevel</span><span class="p">(</span><span class="nx">p</span><span class="p">.</span><span class="nx">depth_m</span><span class="p">);</span>
+<span class="w">	</span><span class="k">return</span><span class="w"> </span><span class="sb">`&lt;strong&gt;Building&lt;/strong&gt; · OpenStreetMap </span><span class="si">${</span><span class="nx">p</span><span class="p">.</span><span class="nx">osm_id</span><span class="si">}</span><span class="sb">&lt;br&gt;</span>
+<span class="sb">		Type: </span><span class="si">${</span><span class="nx">p</span><span class="p">.</span><span class="nx">use</span><span class="si">}</span><span class="sb">&lt;br&gt;</span>
+<span class="sb">		Max flood depth: &lt;strong&gt;</span><span class="si">${</span><span class="nx">p</span><span class="p">.</span><span class="nx">depth_m</span><span class="si">}</span><span class="sb"> m&lt;/strong&gt; · </span><span class="si">${</span><span class="nx">LEVELS</span><span class="p">[</span><span class="nx">level</span><span class="p">].</span><span class="nx">label</span><span class="si">}</span><span class="sb">&lt;br&gt;</span>
+<span class="sb">		&lt;small&gt;100-year scenario. Exposure, not damage.&lt;/small&gt;`</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>In <code>layers.svelte.js</code>, between the sensors and the flood:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="nx">buildings</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Buildings exposed, 100-year flood&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">visible</span><span class="o">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nx">legend</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;exposure&#39;</span><span class="w"> </span><span class="p">},</span>
+</code></pre></div>
+<p>In <code>MapLibreMap.svelte</code>, import <code>addBuildings</code> and <code>buildingPopup</code>, and make the scenario effect handle both layers, <strong>raster under buildings, buildings under labels</strong>, whichever is switched on first:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="nx">$effect</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">map</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="p">;</span>
+<span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="nx">underLabels</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">map</span><span class="p">.</span><span class="nx">getStyle</span><span class="p">().</span><span class="nx">layers</span><span class="p">.</span><span class="nx">find</span><span class="p">((</span><span class="nx">l</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">l</span><span class="p">.</span><span class="nx">type</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;symbol&#39;</span><span class="p">)</span><span class="o">?</span><span class="p">.</span><span class="nx">id</span><span class="p">;</span>
+<span class="w">		</span><span class="c1">// The raster always goes below the buildings, whichever is switched on first.</span>
+<span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="nx">underBuildings</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">map</span><span class="p">.</span><span class="nx">getLayer</span><span class="p">(</span><span class="s1">&#39;buildings-exposed&#39;</span><span class="p">)</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;buildings-exposed&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">underLabels</span><span class="p">;</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">layers</span><span class="p">.</span><span class="nx">flood</span><span class="p">.</span><span class="nx">visible</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">!</span><span class="nx">map</span><span class="p">.</span><span class="nx">getLayer</span><span class="p">(</span><span class="s1">&#39;flood-depth&#39;</span><span class="p">))</span><span class="w"> </span><span class="nx">addFloodDepth</span><span class="p">(</span><span class="nx">map</span><span class="p">,</span><span class="w"> </span><span class="nx">underBuildings</span><span class="p">);</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">layers</span><span class="p">.</span><span class="nx">buildings</span><span class="p">.</span><span class="nx">visible</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">!</span><span class="nx">map</span><span class="p">.</span><span class="nx">getLayer</span><span class="p">(</span><span class="s1">&#39;buildings-exposed&#39;</span><span class="p">))</span><span class="w"> </span><span class="nx">addBuildings</span><span class="p">(</span><span class="nx">map</span><span class="p">,</span><span class="w"> </span><span class="nx">underLabels</span><span class="p">);</span>
+<span class="w">		</span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="nx">id</span><span class="p">,</span><span class="w"> </span><span class="nx">on</span><span class="p">]</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="p">[[</span><span class="s1">&#39;flood-depth&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">layers</span><span class="p">.</span><span class="nx">flood</span><span class="p">.</span><span class="nx">visible</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;buildings-exposed&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">layers</span><span class="p">.</span><span class="nx">buildings</span><span class="p">.</span><span class="nx">visible</span><span class="p">]])</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">map</span><span class="p">.</span><span class="nx">getLayer</span><span class="p">(</span><span class="nx">id</span><span class="p">))</span><span class="w"> </span><span class="nx">map</span><span class="p">.</span><span class="nx">setLayoutProperty</span><span class="p">(</span><span class="nx">id</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;visibility&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;visible&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;none&#39;</span><span class="p">);</span>
+<span class="w">		</span><span class="p">}</span>
+<span class="w">	</span><span class="p">});</span>
+</code></pre></div>
+<p>In the general click handler, check for a building first:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">				</span><span class="kd">const</span><span class="w"> </span><span class="nx">building</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">getLayer</span><span class="p">(</span><span class="s1">&#39;buildings-exposed&#39;</span><span class="p">)</span>
+<span class="w">					</span><span class="o">?</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">queryRenderedFeatures</span><span class="p">(</span><span class="nx">e</span><span class="p">.</span><span class="nx">point</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">layers</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;buildings-exposed&#39;</span><span class="p">]</span><span class="w"> </span><span class="p">})[</span><span class="mf">0</span><span class="p">]</span>
+<span class="w">					</span><span class="o">:</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="w">				</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">building</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">					</span><span class="ow">new</span><span class="w"> </span><span class="nx">maplibregl</span><span class="p">.</span><span class="nx">Popup</span><span class="p">().</span><span class="nx">setLngLat</span><span class="p">(</span><span class="nx">e</span><span class="p">.</span><span class="nx">lngLat</span><span class="p">).</span><span class="nx">setHTML</span><span class="p">(</span><span class="nx">buildingPopup</span><span class="p">(</span><span class="nx">building</span><span class="p">.</span><span class="nx">properties</span><span class="p">)).</span><span class="nx">addTo</span><span class="p">(</span><span class="nx">m</span><span class="p">);</span>
+<span class="w">				</span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">layers</span><span class="p">.</span><span class="nx">flood</span><span class="p">.</span><span class="nx">visible</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">					</span><span class="err">…</span><span class="w"> </span><span class="c1">// the flood depth, as before</span>
+<span class="w">				</span><span class="p">}</span>
+</code></pre></div>
+<p>The legend, in <code>LayerPanel.svelte</code>, another branch:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>			{:else if layer.visible <span class="err">&amp;&amp;</span> layer.legend === &#39;exposure&#39;}
+				<span class="p">&lt;</span><span class="nt">ul</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;legend&quot;</span><span class="p">&gt;</span>
+					<span class="p">&lt;</span><span class="nt">li</span><span class="p">&gt;&lt;</span><span class="nt">i</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;sq&quot;</span> <span class="na">style:background</span><span class="o">=</span><span class="s">{LEVELS.watch.colour}</span><span class="p">&gt;&lt;/</span><span class="nt">i</span><span class="p">&gt;</span>0.15 – 0.30 m<span class="p">&lt;/</span><span class="nt">li</span><span class="p">&gt;</span>
+					<span class="p">&lt;</span><span class="nt">li</span><span class="p">&gt;&lt;</span><span class="nt">i</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;sq&quot;</span> <span class="na">style:background</span><span class="o">=</span><span class="s">{LEVELS.warning.colour}</span><span class="p">&gt;&lt;/</span><span class="nt">i</span><span class="p">&gt;</span>0.30 – 0.50 m<span class="p">&lt;/</span><span class="nt">li</span><span class="p">&gt;</span>
+					<span class="p">&lt;</span><span class="nt">li</span><span class="p">&gt;&lt;</span><span class="nt">i</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;sq&quot;</span> <span class="na">style:background</span><span class="o">=</span><span class="s">{LEVELS.danger.colour}</span><span class="p">&gt;&lt;/</span><span class="nt">i</span><span class="p">&gt;</span>0.50 m and more<span class="p">&lt;/</span><span class="nt">li</span><span class="p">&gt;</span>
+				<span class="p">&lt;/</span><span class="nt">ul</span><span class="p">&gt;</span>
+</code></pre></div>
+<p><strong>You see:</strong> tick <em>Buildings exposed</em> and zoom in: yellow, orange and red buildings, on top of the blue, under the street names. Click one: its popup. Tick the layers in the other order: the order on the map stays right.</p>
+<h3 id="7j--pages-that-cant-draw-everything">7.J · Pages that can't draw everything</h3>
+<p>Finally, prepare for other map engines (the extras), which may not support every layer. In <code>LayerPanel.svelte</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="c1">// `supported` lists the layers this page can draw; the others are greyed out.</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">supported</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Object</span><span class="p">.</span><span class="nx">keys</span><span class="p">(</span><span class="nx">layers</span><span class="p">)</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$props</span><span class="p">();</span>
+</code></pre></div>
+<p>and in the loop:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>			{@const ok = supported.includes(id)}
+			<span class="p">&lt;</span><span class="nt">label</span> <span class="na">class:off</span><span class="o">=</span><span class="s">{!ok}</span> <span class="na">title</span><span class="o">=</span><span class="s">{ok</span> <span class="err">?</span> <span class="err">&#39;&#39;</span> <span class="na">:</span> <span class="err">&#39;</span><span class="na">Only</span> <span class="na">on</span> <span class="na">the</span> <span class="na">MapLibre</span> <span class="na">page</span><span class="err">&#39;}</span><span class="p">&gt;</span>
+				<span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">&quot;checkbox&quot;</span> <span class="na">bind:checked</span><span class="o">=</span><span class="s">{layer.visible}</span> <span class="na">disabled</span><span class="o">=</span><span class="s">{!ok}</span> <span class="p">/&gt;</span>
+				{layer.label}
+			<span class="p">&lt;/</span><span class="nt">label</span><span class="p">&gt;</span>
+</code></pre></div>
+<p>Add <code>ok &amp;&amp;</code> in front of the three legend conditions, and <code>label.off { color: #999; cursor: default; }</code> to the style. In <code>MapPage.svelte</code>, pass it on: <code>let { children, supported } = $props();</code> and <code>&lt;LayerPanel {supported} /&gt;</code>.</p>
+<p><strong>You see:</strong> nothing changes on the MapLibre page (it supports everything). That's the reference of this step. Commit.</p>
+<hr />
+<p><a href="08-flood-time.html">Step 8 · The flood over time →</a></p>
+
+    </article>
+    <nav class="next" aria-label="Previous and next"><a class="prev" href="06-charts.html"><span>Previous</span>6 · Charts in the popup</a><a class="nxt" href="08-flood-time.html"><span>Next</span>8 · The flood over time</a></nav>
+  </main>
+  <nav class="toc" aria-label="On this page"><p>On this page</p><ol><li><a href="#the-data">The data</a></li><li><a href="#raster-and-vector">Raster and vector</a></li><li><a href="#71--install-the-cog-plugin">7.1 · Install the COG plugin</a></li><li><a href="#72--everything-about-the-scenario-in-one-file-appsrclibscenariojs">7.2 · Everything about the scenario in one file: app/src/lib/scenario.js</a></li><li><a href="#73--two-new-layers-in-the-list">7.3 · Two new layers in the list</a></li><li><a href="#74--draw-them-only-when-asked-in-the-right-order">7.4 · Draw them, only when asked, in the right order</a></li><li><a href="#check">Check</a></li><li><a href="#stuck">Stuck?</a></li><li><a href="#going-further-make-the-web-raster-yourself">Going further: make the web raster yourself</a></li><li><a href="#walkthrough-step-7-in-small-pieces-with-all-the-code">Walkthrough: step 7 in small pieces, with all the code</a></li></ol></nav>
+</div>
+<script src="assets/guide.js"></script>
+</body>
+</html>

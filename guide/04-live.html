@@ -1,0 +1,866 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 4 · Live updates and &amp;quot;feed lost&amp;quot; · Flood twin build guide</title>
+<link rel="stylesheet" href="assets/guide.css">
+<script>try{const t=localStorage.getItem('guide-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header class="top">
+  <button class="menu" type="button" aria-label="Show steps" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">Flood twin <span>build guide</span></a>
+  <a class="repo" href="https://github.com/AlpinistPanda/flood-twin-lab">GitHub</a>
+  <button class="theme" type="button" aria-label="Switch light or dark">◐</button>
+</header>
+<div class="layout">
+  <aside class="side"><nav aria-label="Steps"><ol><li><a href="index.html">Overview</a></li><li><a href="00-sveltekit.html">0 · An empty SvelteKit app</a></li><li><a href="01-feed-table.html">1 · The live feed as a table</a></li><li><a href="02-maplibre.html">2 · Sensors on a map</a></li><li><a href="03-thresholds.html">3 · Thresholds and alerts</a></li><li><a href="04-live.html" aria-current="page">4 · Live updates</a></li><li><a href="05-pages-layers.html">5 · Pages and layers</a></li><li><a href="06-charts.html">6 · Charts in the popup</a></li><li><a href="07-flood-layers.html">7 · Flood raster and vector</a></li><li><a href="08-flood-time.html">8 · The flood over time</a></li><li><a href="09-containers.html">9 · Containers</a></li><li><a href="api.html">The sensor API</a></li></ol></nav></aside>
+  <main>
+    <article>
+<h1 id="step-4--live-updates-and-feed-lost">Step 4 · Live updates and &quot;feed lost&quot;</h1>
+<p class="pager"><a href="03-thresholds.html">← Step 3</a> · <a href="index.html">Guide overview</a> · <a href="05-pages-layers.html">Step 5 →</a></p>
+<p><strong>You build:</strong> a page that asks for new readings every 10 seconds by itself, shows whether the feed is <em>Live</em>, <em>Delayed</em> or <em>Lost</em>, and never pretends that old data is current.
+<strong>You learn:</strong> polling with <code>setTimeout</code>; timeouts with <code>AbortSignal</code>; cleaning up timers; describing a situation as a small state machine.
+<strong>Time:</strong> about 45 minutes.
+<strong>Start from:</strong> your step 3, or the tag <code>step-3</code>.</p>
+<hr />
+<h2 id="why-this-matters">Why this matters</h2>
+<p>During a flood, the twin is open on a screen in a control room for hours. Nobody presses <em>Refresh</em>. If the connection to the sensors breaks, the map keeps showing the last colours, and they look exactly like current ones. A twin that shows yesterday's map as if it were today's is worse than no twin.</p>
+<p>So in this step the page polls by itself, and it says, loudly, when it can't get data.</p>
+<p>All changes are in <code>app/src/routes/+page.svelte</code>.</p>
+<h2 id="41--never-wait-forever">4.1 · Never wait forever</h2>
+<p><code>fetch()</code> waits as long as the server takes. A server that hangs would freeze your feed without an error. Write a helper that gives up after 5 seconds and treats a bad status as an error:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="kd">const</span><span class="w"> </span><span class="nx">TIMEOUT_MS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">5</span><span class="nx">_000</span><span class="p">;</span>
+
+<span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">getJSON</span><span class="p">(</span><span class="nx">url</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">res</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="nx">url</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">signal</span><span class="o">:</span><span class="w"> </span><span class="nx">AbortSignal</span><span class="p">.</span><span class="nx">timeout</span><span class="p">(</span><span class="nx">TIMEOUT_MS</span><span class="p">)</span><span class="w"> </span><span class="p">});</span>
+<span class="w">	</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">res</span><span class="p">.</span><span class="nx">ok</span><span class="p">)</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="ne">Error</span><span class="p">(</span><span class="sb">`</span><span class="si">${</span><span class="nx">url</span><span class="si">}</span><span class="sb"> answered </span><span class="si">${</span><span class="nx">res</span><span class="p">.</span><span class="nx">status</span><span class="si">}</span><span class="sb">`</span><span class="p">);</span>
+<span class="w">	</span><span class="k">return</span><span class="w"> </span><span class="nx">res</span><span class="p">.</span><span class="nx">json</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>(<code>5_000</code> is just <code>5000</code>; the <code>_</code> makes long numbers easier to read.)</p>
+<h2 id="42--poll-dont-load">4.2 · Poll, don't load</h2>
+<p>Rename <code>load()</code> to <strong><code>poll()</code></strong> and change it:</p>
+<ul>
+<li>
+<p>Fetch <code>/api/sites</code> <strong>only the first time</strong> (<code>if (sites.length === 0)</code>): sites don't change.</p>
+</li>
+<li>
+<p>Fetch <code>/api/live</code> every time, with <code>getJSON</code>.</p>
+</li>
+<li>
+<p>Replace <code>error</code> by two pieces of state that describe the feed's health:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="kd">let</span><span class="w"> </span><span class="nx">lastOk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span><span class="w">    </span><span class="c1">// when (browser clock, ms) we last got a good answer</span>
+<span class="kd">let</span><span class="w"> </span><span class="nx">lastError</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span><span class="w"> </span><span class="c1">// what went wrong last time, or null</span>
+</code></pre></div>
+<p>On success: <code>lastOk = Date.now(); lastError = null;</code>. On failure: set <code>lastError</code> to the message, but <strong>keep</strong> <code>live</code>, <code>levels</code> and everything else. The last good data stays on screen; we only remember that it's getting old. For a timeout (<code>e.name === 'TimeoutError'</code>), write something a person understands, like <em>the API did not answer in time</em>.</p>
+</li>
+</ul>
+<h2 id="43--ask-again-every-10-seconds">4.3 · Ask again every 10 seconds</h2>
+<p>You could write <code>setInterval(poll, 10_000)</code>. Don't: if the API is slow and takes 12 seconds to answer, <code>setInterval</code> sends the next request anyway, and requests pile up exactly when the server is already struggling (during a flood, when everyone opens the map).</p>
+<p>Instead: poll, <strong>wait for the answer</strong>, then schedule the next one with <code>setTimeout</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="kd">const</span><span class="w"> </span><span class="nx">POLL_MS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">10</span><span class="nx">_000</span><span class="p">;</span>
+<span class="kd">let</span><span class="w"> </span><span class="nx">polling</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">true</span><span class="p">);</span><span class="w"> </span><span class="c1">// for a Pause button</span>
+
+<span class="nx">onMount</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">timer</span><span class="p">;</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">stopped</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+
+<span class="w">	</span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">tick</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">polling</span><span class="p">)</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">poll</span><span class="p">();</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">stopped</span><span class="p">)</span><span class="w"> </span><span class="nx">timer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">setTimeout</span><span class="p">(</span><span class="nx">tick</span><span class="p">,</span><span class="w"> </span><span class="nx">POLL_MS</span><span class="p">);</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nx">tick</span><span class="p">();</span>
+
+<span class="w">	</span><span class="k">return</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nx">stopped</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
+<span class="w">		</span><span class="nx">clearTimeout</span><span class="p">(</span><span class="nx">timer</span><span class="p">);</span>
+<span class="w">	</span><span class="p">};</span>
+<span class="p">});</span>
+</code></pre></div>
+<p>The function that <code>onMount</code> <strong>returns</strong> runs when the page goes away. Without it, the timer would keep polling forever in the background, even after you've left the page. (You'll see that this matters in step 5, when there are several pages.)</p>
+<p>Replace the <em>Refresh</em> button by two buttons: <strong>Pause / Resume</strong> (switches <code>polling</code>) and <strong>Update now</strong> (calls <code>poll</code>).</p>
+<h2 id="44--live-delayed-or-lost">4.4 · Live, delayed or lost?</h2>
+<p>The feed is in one of four situations:</p>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>connecting</code></td>
+<td>No good answer yet, and no error yet</td>
+</tr>
+<tr>
+<td><code>live</code></td>
+<td>The last request worked</td>
+</tr>
+<tr>
+<td><code>delayed</code></td>
+<td>The last request failed, but we had a good answer less than 30 s ago</td>
+</tr>
+<tr>
+<td><code>lost</code></td>
+<td>No good answer for 30 s (or never, and there was an error)</td>
+</tr>
+</tbody>
+</table>
+<p>Write that as one derived value, <code>feed</code>, from <code>lastOk</code>, <code>lastError</code> and the current time. There's a catch: <code>Date.now()</code> is not state, so a <code>$derived</code> that uses it would never recompute while nothing else changes, and <em>delayed</em> would never turn into <em>lost</em>. So keep a ticking clock in state:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="kd">let</span><span class="w"> </span><span class="nx">now</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="nb">Date</span><span class="p">.</span><span class="nx">now</span><span class="p">());</span>
+<span class="c1">// in onMount:</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">clock</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">setInterval</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">(</span><span class="nx">now</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Date</span><span class="p">.</span><span class="nx">now</span><span class="p">()),</span><span class="w"> </span><span class="mf">1000</span><span class="p">);</span>
+<span class="c1">// and in the clean-up function:</span>
+<span class="nx">clearInterval</span><span class="p">(</span><span class="nx">clock</span><span class="p">);</span>
+</code></pre></div>
+<p>Now write <code>let feed = $derived(…)</code> using <code>lastOk</code>, <code>lastError</code>, <code>now</code> and <code>FEED_LOST_AFTER_MS = 30_000</code>. A chain of <code>condition ? a : b</code> works well here.</p>
+<h2 id="45--say-it-on-screen">4.5 · Say it on screen</h2>
+<ol>
+<li>
+<p><strong>A status line</strong> at the top: a coloured dot (grey, green, orange, red for the four statuses) and a text:</p>
+<ul>
+<li><em>Connecting to the sensor feed …</em></li>
+<li><strong>Live</strong> · sensor time 14:30 IST · updated 3 s ago</li>
+<li><strong>Delayed</strong> · last update 15 s ago, retrying</li>
+<li><strong>Feed lost</strong> · <em>the reason from <code>lastError</code></em></li>
+</ul>
+<p>A helper <code>secondsAgo(t)</code> that returns <code>Math.round((now - t) / 1000)</code> keeps the &quot;… s ago&quot; ticking.</p>
+</li>
+<li>
+<p><strong>A dark banner when the feed is lost:</strong> <em>No data from the sensors for 45 s. The map shows the last known levels, from 14:30 IST. They may be out of date.</em></p>
+</li>
+<li>
+<p><strong>The alert banner must not lie.</strong> While the feed is lost:</p>
+<ul>
+<li>with alerts, it starts with <strong>&quot;Last known:&quot;</strong>;</li>
+<li>without alerts, it must <strong>not</strong> say <em>No flood warnings</em>. It says <strong>&quot;Flood warnings unknown: the feed is lost.&quot;</strong> A false all-clear is the most dangerous thing a flood map can show.</li>
+</ul>
+</li>
+<li>
+<p><strong>Grey out the map and the table</strong> while the feed is lost. Wrap the map in a <code>&lt;div class:faded-map={feed === 'lost'}&gt;</code> and give that class <code>filter: grayscale(0.9) opacity(0.6);</code>.</p>
+</li>
+</ol>
+<h2 id="check">Check</h2>
+<ul>
+<li>[ ] Leave the page alone: the dot is green, the sensor time moves on every 10 s, &quot;updated … s ago&quot; counts up and resets.</li>
+<li>[ ] Stop the API (Ctrl+C in terminal 1). Within 10 s: orange, <strong>Delayed</strong>. After 30 s: red, <strong>Feed lost</strong>, a dark banner, a grey map, <em>Last known:</em> or <em>Flood warnings unknown</em>.</li>
+<li>[ ] Start the API again: green within 10 s, <strong>without reloading the page</strong>.</li>
+<li>[ ] <strong>Pause</strong> stops the updates; <strong>Update now</strong> still works.</li>
+<li>[ ] Open the browser's developer tools, <strong>Network</strong> tab: exactly one request to <code>/api/live</code> every 10 s.</li>
+</ul>
+<p>Commit your work.</p>
+<h2 id="stuck">Stuck?</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Try</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>It never becomes <em>lost</em>, stays <em>delayed</em></td>
+<td>Your <code>feed</code> doesn't depend on a <code>$state</code> that changes every second. Use <code>now</code></td>
+</tr>
+<tr>
+<td>Requests every 10 s become two, then four…</td>
+<td>Hot reload started a second timer: your clean-up function is missing or doesn't stop the timer. Reload the page to check</td>
+</tr>
+<tr>
+<td>When the API is back, it stays <em>lost</em></td>
+<td>Set <code>lastError = null</code> on success</td>
+</tr>
+<tr>
+<td>The map is empty after the API was down at the start</td>
+<td><code>sites</code> stayed empty: fetch it in <code>poll()</code> while <code>sites.length === 0</code>, not only once in <code>onMount</code></td>
+</tr>
+</tbody>
+</table>
+<p>Compare: <code>git diff step-4 -- app/src</code>.</p>
+<details>
+<summary>🔍 What changed in <code>app/src/routes/+page.svelte</code> from <code>step-3</code> to <code>step-4</code></summary>
+<div class="code" data-lang="diff"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="gd">--- a/app/src/routes/+page.svelte</span>
+<span class="gi">+++ b/app/src/routes/+page.svelte</span>
+<span class="gu">@@ -7,18 +7,32 @@</span>
+<span class="w"> </span>	// Step 2: show them on a map as well as in the table.
+<span class="w"> </span>	// Step 3: turn each reading into a level (dry / watch / warning / danger, or stale / suspect).
+<span class="gi">+	// Step 4: ask for new readings by itself, and say so clearly when the feed is lost.</span>
+<span class="gi">+</span>
+<span class="gi">+	const POLL_MS = 10_000; // ask the API every 10 s (= 10 minutes of replayed data)</span>
+<span class="gi">+	const TIMEOUT_MS = 5_000; // give up on a request that takes longer than this</span>
+<span class="gi">+	const FEED_LOST_AFTER_MS = 30_000; // no good answer for this long: the feed is lost</span>
+<span class="w"> </span>
+<span class="w"> </span>	let sites = $state([]); // from /api/sites: where each sensor is
+<span class="w"> </span>	let live = $state(null); // from /api/live: the latest reading of each sensor
+<span class="gd">-	let error = $state(null);</span>
+<span class="w"> </span>
+<span class="w"> </span>	// Step 3: the level of each sensor, and how often it changed since you opened the page.
+<span class="gd">-	// We keep the previous levels because hysteresis needs them.</span>
+<span class="w"> </span>	let levels = $state({});
+<span class="w"> </span>	let changes = $state({});
+<span class="w"> </span>
+<span class="gd">-	// The same data as GeoJSON for the map. $derived recomputes it whenever its inputs change.</span>
+<span class="gd">-	let geojson = $derived(toGeoJSON(sites, live, levels));</span>
+<span class="gi">+	// Step 4: the health of the feed.</span>
+<span class="gi">+	let polling = $state(true); // the Pause / Resume button</span>
+<span class="gi">+	let lastOk = $state(null); // when (browser clock) we last got a good answer</span>
+<span class="gi">+	let lastError = $state(null); // what went wrong last time, if anything</span>
+<span class="gi">+	let now = $state(Date.now()); // ticks every second, so &quot;… s ago&quot; stays up to date</span>
+<span class="gi">+</span>
+<span class="gi">+	let feed = $derived(</span>
+<span class="gi">+		lastOk == null</span>
+<span class="gi">+			? lastError ? &#39;lost&#39; : &#39;connecting&#39;</span>
+<span class="gi">+			: !lastError ? &#39;live&#39;</span>
+<span class="gi">+			: now - lastOk &lt; FEED_LOST_AFTER_MS ? &#39;delayed&#39;</span>
+<span class="gi">+			: &#39;lost&#39;</span>
+<span class="gi">+	);</span>
+<span class="w"> </span>
+<span class="gd">-	// The alert banner: every sensor at warning or danger, most severe first.</span>
+<span class="gi">+	let geojson = $derived(toGeoJSON(sites, live, levels));</span>
+<span class="w"> </span>	let alerts = $derived(
+<span class="w"> </span>		sites
+<span class="gu">@@ -28,14 +42,21 @@</span>
+<span class="w"> </span>	let untrusted = $derived(sites.filter((s) =&gt; levels[s.id] === &#39;stale&#39; || levels[s.id] === &#39;suspect&#39;).length);
+<span class="w"> </span>
+<span class="gd">-	async function load() {</span>
+<span class="gd">-		error = null;</span>
+<span class="gi">+	// Fetch JSON, but never wait forever: a hanging server must count as a failure too.</span>
+<span class="gi">+	async function getJSON(url) {</span>
+<span class="gi">+		const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });</span>
+<span class="gi">+		if (!res.ok) throw new Error(`${url} answered ${res.status}`);</span>
+<span class="gi">+		return res.json();</span>
+<span class="gi">+	}</span>
+<span class="gi">+</span>
+<span class="gi">+	async function poll() {</span>
+<span class="w"> </span>		try {
+<span class="gd">-			const [sitesRes, liveRes] = await Promise.all([fetch(&#39;/api/sites&#39;), fetch(&#39;/api/live&#39;)]);</span>
+<span class="gd">-			if (!sitesRes.ok || !liveRes.ok) throw new Error(`API answered ${sitesRes.status} / ${liveRes.status}`);</span>
+<span class="gd">-			sites = (await sitesRes.json()).sites;</span>
+<span class="gd">-			live = await liveRes.json();</span>
+<span class="gi">+			if (sites.length === 0) sites = (await getJSON(&#39;/api/sites&#39;)).sites; // only once</span>
+<span class="gi">+			live = await getJSON(&#39;/api/live&#39;);</span>
+<span class="w"> </span>			updateLevels();
+<span class="gi">+			lastOk = Date.now();</span>
+<span class="gi">+			lastError = null;</span>
+<span class="w"> </span>		} catch (e) {
+<span class="gd">-			error = `Could not reach the sensor API: ${e.message}. Is it running?`;</span>
+<span class="gi">+			// Keep the last good data on screen, but remember that this attempt failed.</span>
+<span class="gi">+			lastError = e.name === &#39;TimeoutError&#39; ? &#39;the API did not answer in time&#39; : e.message;</span>
+<span class="w"> </span>		}
+<span class="w"> </span>	}
+<span class="gu">@@ -51,10 +72,33 @@</span>
+<span class="w"> </span>	}
+<span class="w"> </span>
+<span class="gd">-	onMount(load);</span>
+<span class="gi">+	onMount(() =&gt; {</span>
+<span class="gi">+		let timer;</span>
+<span class="gi">+		let stopped = false;</span>
+<span class="gi">+</span>
+<span class="gi">+		// Poll, wait, poll again. We wait for each answer before scheduling the next request</span>
+<span class="gi">+		// (setTimeout, not setInterval), so a slow API never piles up requests.</span>
+<span class="gi">+		async function tick() {</span>
+<span class="gi">+			if (polling) await poll();</span>
+<span class="gi">+			if (!stopped) timer = setTimeout(tick, POLL_MS);</span>
+<span class="gi">+		}</span>
+<span class="gi">+		tick();</span>
+<span class="gi">+</span>
+<span class="gi">+		const clock = setInterval(() =&gt; (now = Date.now()), 1000);</span>
+<span class="gi">+</span>
+<span class="gi">+		// Clean up when the page goes away, or the timers keep running.</span>
+<span class="gi">+		return () =&gt; {</span>
+<span class="gi">+			stopped = true;</span>
+<span class="gi">+			clearTimeout(timer);</span>
+<span class="gi">+			clearInterval(clock);</span>
+<span class="gi">+		};</span>
+<span class="gi">+	});</span>
+<span class="w"> </span>
+<span class="gd">-	// Look up a site&#39;s latest reading by its id.</span>
+<span class="w"> </span>	function readingFor(id) {
+<span class="w"> </span>		return live?.readings.find((r) =&gt; r.site === id);
+<span class="w"> </span>	}
+<span class="gi">+</span>
+<span class="gi">+	function secondsAgo(t) {</span>
+<span class="gi">+		return Math.round((now - t) / 1000);</span>
+<span class="gi">+	}</span>
+<span class="w"> </span>&lt;/script&gt;
+<span class="w"> </span>
+<span class="gu">@@ -66,11 +110,26 @@</span>
+<span class="w"> </span>	&lt;h1&gt;Tambaram water levels&lt;/h1&gt;
+<span class="w"> </span>
+<span class="gd">-	&lt;p&gt;</span>
+<span class="gd">-		Sensor time: &lt;strong&gt;{showTime(live?.time)} IST&lt;/strong&gt;</span>
+<span class="gd">-		&lt;button onclick={load}&gt;Refresh&lt;/button&gt;</span>
+<span class="gi">+	&lt;p class=&quot;status&quot;&gt;</span>
+<span class="gi">+		&lt;span class=&quot;feed {feed}&quot;&gt;●&lt;/span&gt;</span>
+<span class="gi">+		{#if feed === &#39;connecting&#39;}</span>
+<span class="gi">+			Connecting to the sensor feed …</span>
+<span class="gi">+		{:else if feed === &#39;live&#39;}</span>
+<span class="gi">+			&lt;strong&gt;Live&lt;/strong&gt; · sensor time {showTime(live?.time)} IST · updated {secondsAgo(lastOk)} s ago</span>
+<span class="gi">+		{:else if feed === &#39;delayed&#39;}</span>
+<span class="gi">+			&lt;strong&gt;Delayed&lt;/strong&gt; · last update {secondsAgo(lastOk)} s ago, retrying</span>
+<span class="gi">+		{:else}</span>
+<span class="gi">+			&lt;strong&gt;Feed lost&lt;/strong&gt; · {lastError}</span>
+<span class="gi">+		{/if}</span>
+<span class="gi">+		&lt;button onclick={() =&gt; (polling = !polling)}&gt;{polling ? &#39;Pause&#39; : &#39;Resume&#39;}&lt;/button&gt;</span>
+<span class="gi">+		&lt;button onclick={poll}&gt;Update now&lt;/button&gt;</span>
+<span class="w"> </span>	&lt;/p&gt;
+<span class="w"> </span>
+<span class="gd">-	{#if error}</span>
+<span class="gd">-		&lt;p class=&quot;error&quot;&gt;{error}&lt;/p&gt;</span>
+<span class="gi">+	{#if feed === &#39;lost&#39;}</span>
+<span class="gi">+		&lt;div class=&quot;banner lost&quot;&gt;</span>
+<span class="gi">+			&lt;strong&gt;No data from the sensors{lastOk ? ` for ${secondsAgo(lastOk)} s` : &#39;&#39;}.&lt;/strong&gt;</span>
+<span class="gi">+			{#if live}</span>
+<span class="gi">+				The map shows the last known levels, from {showTime(live.time)} IST. They may be out of date.</span>
+<span class="gi">+			{/if}</span>
+<span class="gi">+		&lt;/div&gt;</span>
+<span class="w"> </span>	{/if}
+<span class="w"> </span>
+<span class="gu">@@ -78,8 +137,14 @@</span>
+<span class="w"> </span>		&lt;div class=&quot;banner&quot; class:alert={alerts.length &gt; 0}&gt;
+<span class="w"> </span>			{#if alerts.length &gt; 0}
+<span class="gd">-				&lt;strong&gt;{alerts.length} {alerts.length === 1 ? &#39;sensor&#39; : &#39;sensors&#39;} at warning or danger:&lt;/strong&gt;</span>
+<span class="gi">+				&lt;strong&gt;</span>
+<span class="gi">+					{feed === &#39;lost&#39; ? &#39;Last known: &#39; : &#39;&#39;}{alerts.length}</span>
+<span class="gi">+					{alerts.length === 1 ? &#39;sensor&#39; : &#39;sensors&#39;} at warning or danger:</span>
+<span class="gi">+				&lt;/strong&gt;</span>
+<span class="w"> </span>				{#each alerts as site, i (site.id)}
+<span class="w"> </span>					{i &gt; 0 ? &#39;, &#39; : &#39;&#39;}{site.id} ({readingFor(site.id).depth_m} m)
+<span class="w"> </span>				{/each}
+<span class="gi">+			{:else if feed === &#39;lost&#39;}</span>
+<span class="gi">+				&lt;!-- &quot;No warnings&quot; while the feed is down would be a false all-clear. --&gt;</span>
+<span class="gi">+				&lt;strong&gt;Flood warnings unknown: the feed is lost.&lt;/strong&gt;</span>
+<span class="w"> </span>			{:else}
+<span class="w"> </span>				&lt;strong&gt;No flood warnings.&lt;/strong&gt;
+<span class="gu">@@ -89,5 +154,7 @@</span>
+<span class="w"> </span>	{/if}
+<span class="w"> </span>
+<span class="gd">-	&lt;MapLibreMap {geojson} /&gt;</span>
+<span class="gi">+	&lt;div class:faded-map={feed === &#39;lost&#39;}&gt;</span>
+<span class="gi">+		&lt;MapLibreMap {geojson} /&gt;</span>
+<span class="gi">+	&lt;/div&gt;</span>
+<span class="w"> </span>
+<span class="w"> </span>	&lt;p class=&quot;legend&quot;&gt;
+<span class="gu">@@ -97,5 +164,5 @@</span>
+<span class="w"> </span>	&lt;/p&gt;
+<span class="w"> </span>
+<span class="gd">-	&lt;table&gt;</span>
+<span class="gi">+	&lt;table class:faded={feed === &#39;lost&#39;}&gt;</span>
+<span class="w"> </span>		&lt;thead&gt;
+<span class="w"> </span>			&lt;tr&gt;&lt;th&gt;Site&lt;/th&gt;&lt;th&gt;Type&lt;/th&gt;&lt;th&gt;Depth (m)&lt;/th&gt;&lt;th&gt;Level&lt;/th&gt;&lt;th&gt;Measured&lt;/th&gt;&lt;th&gt;Age&lt;/th&gt;&lt;th&gt;Changes&lt;/th&gt;&lt;/tr&gt;
+<span class="gu">@@ -126,4 +193,22 @@</span>
+<span class="w"> </span>		padding: 0 1rem;
+<span class="w"> </span>	}
+<span class="gi">+	.status button {</span>
+<span class="gi">+		margin-left: 0.4rem;</span>
+<span class="gi">+	}</span>
+<span class="gi">+	.feed {</span>
+<span class="gi">+		font-size: 1.1rem;</span>
+<span class="gi">+	}</span>
+<span class="gi">+	.feed.connecting {</span>
+<span class="gi">+		color: #b0b0b0;</span>
+<span class="gi">+	}</span>
+<span class="gi">+	.feed.live {</span>
+<span class="gi">+		color: #2e7d32;</span>
+<span class="gi">+	}</span>
+<span class="gi">+	.feed.delayed {</span>
+<span class="gi">+		color: #ef6c00;</span>
+<span class="gi">+	}</span>
+<span class="gi">+	.feed.lost {</span>
+<span class="gi">+		color: #c62828;</span>
+<span class="gi">+	}</span>
+<span class="w"> </span>	.banner {
+<span class="w"> </span>		padding: 0.6rem 0.9rem;
+<span class="gu">@@ -137,4 +222,9 @@</span>
+<span class="w"> </span>		border-left-color: #c62828;
+<span class="w"> </span>	}
+<span class="gi">+	.banner.lost {</span>
+<span class="gi">+		background: #333;</span>
+<span class="gi">+		color: #fff;</span>
+<span class="gi">+		border-left-color: #c62828;</span>
+<span class="gi">+	}</span>
+<span class="w"> </span>	.note {
+<span class="w"> </span>		display: block;
+<span class="gu">@@ -143,4 +233,8 @@</span>
+<span class="w"> </span>		margin-top: 0.2rem;
+<span class="w"> </span>	}
+<span class="gi">+	/* Feed lost: grey the map out, so nobody mistakes old colours for the current situation. */</span>
+<span class="gi">+	.faded-map {</span>
+<span class="gi">+		filter: grayscale(0.9) opacity(0.6);</span>
+<span class="gi">+	}</span>
+<span class="w"> </span>	.legend {
+<span class="w"> </span>		display: flex;
+<span class="gu">@@ -175,6 +269,3 @@</span>
+<span class="w"> </span>		color: #888;
+<span class="w"> </span>	}
+<span class="gd">-	.error {</span>
+<span class="gd">-		color: #b00020;</span>
+<span class="gd">-	}</span>
+<span class="w"> </span>&lt;/style&gt;
+</code></pre></div>
+</details>
+<details>
+<summary>📄 <code>app/src/routes/+page.svelte</code> as it is at <code>step-4</code></summary>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">onMount</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;svelte&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="nx">MapLibreMap</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/MapLibreMap.svelte&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">toGeoJSON</span><span class="p">,</span><span class="w"> </span><span class="nx">classify</span><span class="p">,</span><span class="w"> </span><span class="nx">LEVELS</span><span class="p">,</span><span class="w"> </span><span class="nx">showTime</span><span class="p">,</span><span class="w"> </span><span class="nx">showAge</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/sensors.js&#39;</span><span class="p">;</span>
+
+<span class="w">	</span><span class="c1">// Step 1: ask the sensor API for the sites and their latest readings.</span>
+<span class="w">	</span><span class="c1">// Step 2: show them on a map as well as in the table.</span>
+<span class="w">	</span><span class="c1">// Step 3: turn each reading into a level (dry / watch / warning / danger, or stale / suspect).</span>
+<span class="w">	</span><span class="c1">// Step 4: ask for new readings by itself, and say so clearly when the feed is lost.</span>
+
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">POLL_MS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">10</span><span class="nx">_000</span><span class="p">;</span><span class="w"> </span><span class="c1">// ask the API every 10 s (= 10 minutes of replayed data)</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">TIMEOUT_MS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">5</span><span class="nx">_000</span><span class="p">;</span><span class="w"> </span><span class="c1">// give up on a request that takes longer than this</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">FEED_LOST_AFTER_MS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">30</span><span class="nx">_000</span><span class="p">;</span><span class="w"> </span><span class="c1">// no good answer for this long: the feed is lost</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">sites</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">([]);</span><span class="w"> </span><span class="c1">// from /api/sites: where each sensor is</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">live</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span><span class="w"> </span><span class="c1">// from /api/live: the latest reading of each sensor</span>
+
+<span class="w">	</span><span class="c1">// Step 3: the level of each sensor, and how often it changed since you opened the page.</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">levels</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">({});</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">changes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">({});</span>
+
+<span class="w">	</span><span class="c1">// Step 4: the health of the feed.</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">polling</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">true</span><span class="p">);</span><span class="w"> </span><span class="c1">// the Pause / Resume button</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">lastOk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span><span class="w"> </span><span class="c1">// when (browser clock) we last got a good answer</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">lastError</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span><span class="w"> </span><span class="c1">// what went wrong last time, if anything</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">now</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="nb">Date</span><span class="p">.</span><span class="nx">now</span><span class="p">());</span><span class="w"> </span><span class="c1">// ticks every second, so &quot;… s ago&quot; stays up to date</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">feed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span>
+<span class="w">		</span><span class="nx">lastOk</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span>
+<span class="w">			</span><span class="o">?</span><span class="w"> </span><span class="nx">lastError</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;lost&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;connecting&#39;</span>
+<span class="w">			</span><span class="o">:</span><span class="w"> </span><span class="o">!</span><span class="nx">lastError</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;live&#39;</span>
+<span class="w">			</span><span class="o">:</span><span class="w"> </span><span class="nx">now</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">lastOk</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="nx">FEED_LOST_AFTER_MS</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;delayed&#39;</span>
+<span class="w">			</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;lost&#39;</span>
+<span class="w">	</span><span class="p">);</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">geojson</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">toGeoJSON</span><span class="p">(</span><span class="nx">sites</span><span class="p">,</span><span class="w"> </span><span class="nx">live</span><span class="p">,</span><span class="w"> </span><span class="nx">levels</span><span class="p">));</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">alerts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span>
+<span class="w">		</span><span class="nx">sites</span>
+<span class="w">			</span><span class="p">.</span><span class="nx">filter</span><span class="p">((</span><span class="nx">s</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">levels</span><span class="p">[</span><span class="nx">s</span><span class="p">.</span><span class="nx">id</span><span class="p">]</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;danger&#39;</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">levels</span><span class="p">[</span><span class="nx">s</span><span class="p">.</span><span class="nx">id</span><span class="p">]</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;warning&#39;</span><span class="p">)</span>
+<span class="w">			</span><span class="p">.</span><span class="nx">sort</span><span class="p">((</span><span class="nx">a</span><span class="p">,</span><span class="w"> </span><span class="nx">b</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">(</span><span class="nx">levels</span><span class="p">[</span><span class="nx">b</span><span class="p">.</span><span class="nx">id</span><span class="p">]</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;danger&#39;</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="p">(</span><span class="nx">levels</span><span class="p">[</span><span class="nx">a</span><span class="p">.</span><span class="nx">id</span><span class="p">]</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;danger&#39;</span><span class="p">))</span>
+<span class="w">	</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">untrusted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">sites</span><span class="p">.</span><span class="nx">filter</span><span class="p">((</span><span class="nx">s</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">levels</span><span class="p">[</span><span class="nx">s</span><span class="p">.</span><span class="nx">id</span><span class="p">]</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;stale&#39;</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">levels</span><span class="p">[</span><span class="nx">s</span><span class="p">.</span><span class="nx">id</span><span class="p">]</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;suspect&#39;</span><span class="p">).</span><span class="nx">length</span><span class="p">);</span>
+
+<span class="w">	</span><span class="c1">// Fetch JSON, but never wait forever: a hanging server must count as a failure too.</span>
+<span class="w">	</span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">getJSON</span><span class="p">(</span><span class="nx">url</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="nx">res</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="nx">url</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">signal</span><span class="o">:</span><span class="w"> </span><span class="nx">AbortSignal</span><span class="p">.</span><span class="nx">timeout</span><span class="p">(</span><span class="nx">TIMEOUT_MS</span><span class="p">)</span><span class="w"> </span><span class="p">});</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">res</span><span class="p">.</span><span class="nx">ok</span><span class="p">)</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="ne">Error</span><span class="p">(</span><span class="sb">`</span><span class="si">${</span><span class="nx">url</span><span class="si">}</span><span class="sb"> answered </span><span class="si">${</span><span class="nx">res</span><span class="p">.</span><span class="nx">status</span><span class="si">}</span><span class="sb">`</span><span class="p">);</span>
+<span class="w">		</span><span class="k">return</span><span class="w"> </span><span class="nx">res</span><span class="p">.</span><span class="nx">json</span><span class="p">();</span>
+<span class="w">	</span><span class="p">}</span>
+
+<span class="w">	</span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">poll</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">sites</span><span class="p">.</span><span class="nx">length</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="mf">0</span><span class="p">)</span><span class="w"> </span><span class="nx">sites</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="k">await</span><span class="w"> </span><span class="nx">getJSON</span><span class="p">(</span><span class="s1">&#39;/api/sites&#39;</span><span class="p">)).</span><span class="nx">sites</span><span class="p">;</span><span class="w"> </span><span class="c1">// only once</span>
+<span class="w">			</span><span class="nx">live</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">getJSON</span><span class="p">(</span><span class="s1">&#39;/api/live&#39;</span><span class="p">);</span>
+<span class="w">			</span><span class="nx">updateLevels</span><span class="p">();</span>
+<span class="w">			</span><span class="nx">lastOk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Date</span><span class="p">.</span><span class="nx">now</span><span class="p">();</span>
+<span class="w">			</span><span class="nx">lastError</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="w">		</span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="nx">e</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="c1">// Keep the last good data on screen, but remember that this attempt failed.</span>
+<span class="w">			</span><span class="nx">lastError</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="nx">name</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;TimeoutError&#39;</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;the API did not answer in time&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="nx">message</span><span class="p">;</span>
+<span class="w">		</span><span class="p">}</span>
+<span class="w">	</span><span class="p">}</span>
+
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">updateLevels</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="nx">next</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{};</span>
+<span class="w">		</span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">site</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">sites</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="kd">const</span><span class="w"> </span><span class="nx">level</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">classify</span><span class="p">(</span><span class="nx">site</span><span class="p">,</span><span class="w"> </span><span class="nx">readingFor</span><span class="p">(</span><span class="nx">site</span><span class="p">.</span><span class="nx">id</span><span class="p">),</span><span class="w"> </span><span class="nx">levels</span><span class="p">[</span><span class="nx">site</span><span class="p">.</span><span class="nx">id</span><span class="p">]);</span>
+<span class="w">			</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">levels</span><span class="p">[</span><span class="nx">site</span><span class="p">.</span><span class="nx">id</span><span class="p">]</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">levels</span><span class="p">[</span><span class="nx">site</span><span class="p">.</span><span class="nx">id</span><span class="p">]</span><span class="w"> </span><span class="o">!==</span><span class="w"> </span><span class="nx">level</span><span class="p">)</span><span class="w"> </span><span class="nx">changes</span><span class="p">[</span><span class="nx">site</span><span class="p">.</span><span class="nx">id</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">changes</span><span class="p">[</span><span class="nx">site</span><span class="p">.</span><span class="nx">id</span><span class="p">]</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="mf">0</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mf">1</span><span class="p">;</span>
+<span class="w">			</span><span class="nx">next</span><span class="p">[</span><span class="nx">site</span><span class="p">.</span><span class="nx">id</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">level</span><span class="p">;</span>
+<span class="w">		</span><span class="p">}</span>
+<span class="w">		</span><span class="nx">levels</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">next</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+
+<span class="w">	</span><span class="nx">onMount</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="kd">let</span><span class="w"> </span><span class="nx">timer</span><span class="p">;</span>
+<span class="w">		</span><span class="kd">let</span><span class="w"> </span><span class="nx">stopped</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+
+<span class="w">		</span><span class="c1">// Poll, wait, poll again. We wait for each answer before scheduling the next request</span>
+<span class="w">		</span><span class="c1">// (setTimeout, not setInterval), so a slow API never piles up requests.</span>
+<span class="w">		</span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">tick</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">polling</span><span class="p">)</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">poll</span><span class="p">();</span>
+<span class="w">			</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">stopped</span><span class="p">)</span><span class="w"> </span><span class="nx">timer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">setTimeout</span><span class="p">(</span><span class="nx">tick</span><span class="p">,</span><span class="w"> </span><span class="nx">POLL_MS</span><span class="p">);</span>
+<span class="w">		</span><span class="p">}</span>
+<span class="w">		</span><span class="nx">tick</span><span class="p">();</span>
+
+<span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="nx">clock</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">setInterval</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">(</span><span class="nx">now</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Date</span><span class="p">.</span><span class="nx">now</span><span class="p">()),</span><span class="w"> </span><span class="mf">1000</span><span class="p">);</span>
+
+<span class="w">		</span><span class="c1">// Clean up when the page goes away, or the timers keep running.</span>
+<span class="w">		</span><span class="k">return</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="nx">stopped</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
+<span class="w">			</span><span class="nx">clearTimeout</span><span class="p">(</span><span class="nx">timer</span><span class="p">);</span>
+<span class="w">			</span><span class="nx">clearInterval</span><span class="p">(</span><span class="nx">clock</span><span class="p">);</span>
+<span class="w">		</span><span class="p">};</span>
+<span class="w">	</span><span class="p">});</span>
+
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">readingFor</span><span class="p">(</span><span class="nx">id</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">return</span><span class="w"> </span><span class="nx">live</span><span class="o">?</span><span class="p">.</span><span class="nx">readings</span><span class="p">.</span><span class="nx">find</span><span class="p">((</span><span class="nx">r</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">site</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">id</span><span class="p">);</span>
+<span class="w">	</span><span class="p">}</span>
+
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">secondsAgo</span><span class="p">(</span><span class="nx">t</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">return</span><span class="w"> </span><span class="nb">Math</span><span class="p">.</span><span class="nx">round</span><span class="p">((</span><span class="nx">now</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">t</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">1000</span><span class="p">);</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">svelte:head</span><span class="p">&gt;</span>
+	<span class="p">&lt;</span><span class="nt">title</span><span class="p">&gt;</span>Flood twin · Tambaram<span class="p">&lt;/</span><span class="nt">title</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">svelte:head</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">main</span><span class="p">&gt;</span>
+	<span class="p">&lt;</span><span class="nt">h1</span><span class="p">&gt;</span>Tambaram water levels<span class="p">&lt;/</span><span class="nt">h1</span><span class="p">&gt;</span>
+
+	<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;status&quot;</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">span</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;feed {feed}&quot;</span><span class="p">&gt;</span>●<span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>
+		{#if feed === &#39;connecting&#39;}
+			Connecting to the sensor feed …
+		{:else if feed === &#39;live&#39;}
+			<span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>Live<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span> · sensor time {showTime(live?.time)} IST · updated {secondsAgo(lastOk)} s ago
+		{:else if feed === &#39;delayed&#39;}
+			<span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>Delayed<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span> · last update {secondsAgo(lastOk)} s ago, retrying
+		{:else}
+			<span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>Feed lost<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span> · {lastError}
+		{/if}
+		<span class="p">&lt;</span><span class="nt">button</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{()</span> <span class="err">=</span><span class="p">&gt;</span> (polling = !polling)}&gt;{polling ? &#39;Pause&#39; : &#39;Resume&#39;}<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">button</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{poll}</span><span class="p">&gt;</span>Update now<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+	<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+
+	{#if feed === &#39;lost&#39;}
+		<span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;banner lost&quot;</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>No data from the sensors{lastOk ? ` for ${secondsAgo(lastOk)} s` : &#39;&#39;}.<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span>
+			{#if live}
+				The map shows the last known levels, from {showTime(live.time)} IST. They may be out of date.
+			{/if}
+		<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+	{/if}
+
+	{#if live}
+		<span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;banner&quot;</span> <span class="na">class:alert</span><span class="o">=</span><span class="s">{alerts.length</span> <span class="p">&gt;</span> 0}&gt;
+			{#if alerts.length &gt; 0}
+				<span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>
+					{feed === &#39;lost&#39; ? &#39;Last known: &#39; : &#39;&#39;}{alerts.length}
+					{alerts.length === 1 ? &#39;sensor&#39; : &#39;sensors&#39;} at warning or danger:
+				<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span>
+				{#each alerts as site, i (site.id)}
+					{i &gt; 0 ? &#39;, &#39; : &#39;&#39;}{site.id} ({readingFor(site.id).depth_m} m)
+				{/each}
+			{:else if feed === &#39;lost&#39;}
+				<span class="cm">&lt;!-- &quot;No warnings&quot; while the feed is down would be a false all-clear. --&gt;</span>
+				<span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>Flood warnings unknown: the feed is lost.<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span>
+			{:else}
+				<span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>No flood warnings.<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span>
+			{/if}
+			<span class="p">&lt;</span><span class="nt">span</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;note&quot;</span><span class="p">&gt;</span>{untrusted} of {sites.length} sensors have no recent or no trustworthy data.<span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>
+		<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+	{/if}
+
+	<span class="p">&lt;</span><span class="nt">div</span> <span class="na">class:faded-map</span><span class="o">=</span><span class="s">{feed</span> <span class="err">===</span> <span class="err">&#39;</span><span class="na">lost</span><span class="err">&#39;}</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">MapLibreMap</span> <span class="err">{</span><span class="na">geojson</span><span class="err">}</span> <span class="p">/&gt;</span>
+	<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+
+	<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;legend&quot;</span><span class="p">&gt;</span>
+		{#each Object.entries(LEVELS) as [key, l] (key)}
+			<span class="p">&lt;</span><span class="nt">span</span><span class="p">&gt;&lt;</span><span class="nt">i</span> <span class="na">style:background</span><span class="o">=</span><span class="s">{l.colour}</span><span class="p">&gt;&lt;/</span><span class="nt">i</span><span class="p">&gt;</span>{l.label}<span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>
+		{/each}
+	<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+
+	<span class="p">&lt;</span><span class="nt">table</span> <span class="na">class:faded</span><span class="o">=</span><span class="s">{feed</span> <span class="err">===</span> <span class="err">&#39;</span><span class="na">lost</span><span class="err">&#39;}</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">thead</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">tr</span><span class="p">&gt;&lt;</span><span class="nt">th</span><span class="p">&gt;</span>Site<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;&lt;</span><span class="nt">th</span><span class="p">&gt;</span>Type<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;&lt;</span><span class="nt">th</span><span class="p">&gt;</span>Depth (m)<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;&lt;</span><span class="nt">th</span><span class="p">&gt;</span>Level<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;&lt;</span><span class="nt">th</span><span class="p">&gt;</span>Measured<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;&lt;</span><span class="nt">th</span><span class="p">&gt;</span>Age<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;&lt;</span><span class="nt">th</span><span class="p">&gt;</span>Changes<span class="p">&lt;/</span><span class="nt">th</span><span class="p">&gt;&lt;/</span><span class="nt">tr</span><span class="p">&gt;</span>
+		<span class="p">&lt;/</span><span class="nt">thead</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">tbody</span><span class="p">&gt;</span>
+			{#each sites as site (site.id)}
+				{@const r = readingFor(site.id)}
+				{@const level = levels[site.id] ?? &#39;stale&#39;}
+				<span class="p">&lt;</span><span class="nt">tr</span> <span class="na">class:faded</span><span class="o">=</span><span class="s">{level</span> <span class="err">===</span> <span class="err">&#39;</span><span class="na">stale</span><span class="err">&#39;</span> <span class="err">||</span> <span class="na">level </span><span class="o">=</span><span class="s">==</span> <span class="err">&#39;</span><span class="na">suspect</span><span class="err">&#39;}</span><span class="p">&gt;</span>
+					<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{site.id}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+					<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{site.type}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+					<span class="p">&lt;</span><span class="nt">td</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;num&quot;</span><span class="p">&gt;</span>{r?.depth_m ?? &#39;–&#39;}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+					<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;&lt;</span><span class="nt">i</span> <span class="na">style:background</span><span class="o">=</span><span class="s">{LEVELS[level].colour}</span><span class="p">&gt;&lt;/</span><span class="nt">i</span><span class="p">&gt;</span>{LEVELS[level].label}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+					<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{showTime(r?.time)}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+					<span class="p">&lt;</span><span class="nt">td</span><span class="p">&gt;</span>{showAge(r?.age_s)}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+					<span class="p">&lt;</span><span class="nt">td</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;num&quot;</span><span class="p">&gt;</span>{changes[site.id] ?? 0}<span class="p">&lt;/</span><span class="nt">td</span><span class="p">&gt;</span>
+				<span class="p">&lt;/</span><span class="nt">tr</span><span class="p">&gt;</span>
+			{/each}
+		<span class="p">&lt;/</span><span class="nt">tbody</span><span class="p">&gt;</span>
+	<span class="p">&lt;/</span><span class="nt">table</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">main</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">style</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="nt">main</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">font-family</span><span class="p">:</span><span class="w"> </span><span class="n">system-ui</span><span class="p">,</span><span class="w"> </span><span class="kc">sans-serif</span><span class="p">;</span>
+<span class="w">		</span><span class="k">max-width</span><span class="p">:</span><span class="w"> </span><span class="mi">60</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="kt">rem</span><span class="w"> </span><span class="kc">auto</span><span class="p">;</span>
+<span class="w">		</span><span class="k">padding</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="mi">1</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">status</span><span class="w"> </span><span class="nt">button</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">margin-left</span><span class="p">:</span><span class="w"> </span><span class="mf">0.4</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">feed</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">1.1</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">feed</span><span class="p">.</span><span class="nc">connecting</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#b0b0b0</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">feed</span><span class="p">.</span><span class="nc">live</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#2e7d32</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">feed</span><span class="p">.</span><span class="nc">delayed</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#ef6c00</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">feed</span><span class="p">.</span><span class="nc">lost</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#c62828</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">banner</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">padding</span><span class="p">:</span><span class="w"> </span><span class="mf">0.6</span><span class="kt">rem</span><span class="w"> </span><span class="mf">0.9</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin-bottom</span><span class="p">:</span><span class="w"> </span><span class="mf">0.8</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">border-radius</span><span class="p">:</span><span class="w"> </span><span class="mi">6</span><span class="kt">px</span><span class="p">;</span>
+<span class="w">		</span><span class="k">background</span><span class="p">:</span><span class="w"> </span><span class="mh">#e8f1f8</span><span class="p">;</span>
+<span class="w">		</span><span class="k">border-left</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="kt">px</span><span class="w"> </span><span class="kc">solid</span><span class="w"> </span><span class="mh">#5b8db8</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">banner</span><span class="p">.</span><span class="nc">alert</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">background</span><span class="p">:</span><span class="w"> </span><span class="mh">#fdecea</span><span class="p">;</span>
+<span class="w">		</span><span class="k">border-left-color</span><span class="p">:</span><span class="w"> </span><span class="mh">#c62828</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">banner</span><span class="p">.</span><span class="nc">lost</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">background</span><span class="p">:</span><span class="w"> </span><span class="mh">#333</span><span class="p">;</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#fff</span><span class="p">;</span>
+<span class="w">		</span><span class="k">border-left-color</span><span class="p">:</span><span class="w"> </span><span class="mh">#c62828</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">note</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">display</span><span class="p">:</span><span class="w"> </span><span class="kc">block</span><span class="p">;</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">0.85</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#555</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin-top</span><span class="p">:</span><span class="w"> </span><span class="mf">0.2</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="c">/* Feed lost: grey the map out, so nobody mistakes old colours for the current situation. */</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">faded-map</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">filter</span><span class="p">:</span><span class="w"> </span><span class="nb">grayscale</span><span class="p">(</span><span class="mf">0.9</span><span class="p">)</span><span class="w"> </span><span class="nb">opacity</span><span class="p">(</span><span class="mf">0.6</span><span class="p">);</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">legend</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">display</span><span class="p">:</span><span class="w"> </span><span class="kc">flex</span><span class="p">;</span>
+<span class="w">		</span><span class="k">flex-wrap</span><span class="p">:</span><span class="w"> </span><span class="kc">wrap</span><span class="p">;</span>
+<span class="w">		</span><span class="k">gap</span><span class="p">:</span><span class="w"> </span><span class="mf">0.4</span><span class="kt">rem</span><span class="w"> </span><span class="mi">1</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">0.85</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nt">i</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">display</span><span class="p">:</span><span class="w"> </span><span class="kc">inline-block</span><span class="p">;</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="mf">0.8</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">height</span><span class="p">:</span><span class="w"> </span><span class="mf">0.8</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">border-radius</span><span class="p">:</span><span class="w"> </span><span class="mi">50</span><span class="kt">%</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin-right</span><span class="p">:</span><span class="w"> </span><span class="mf">0.35</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">vertical-align</span><span class="p">:</span><span class="w"> </span><span class="mf">-0.1</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nt">table</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">border-collapse</span><span class="p">:</span><span class="w"> </span><span class="kc">collapse</span><span class="p">;</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="mi">100</span><span class="kt">%</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin-top</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nt">th</span><span class="o">,</span>
+<span class="w">	</span><span class="nt">td</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">text-align</span><span class="p">:</span><span class="w"> </span><span class="kc">left</span><span class="p">;</span>
+<span class="w">		</span><span class="k">padding</span><span class="p">:</span><span class="w"> </span><span class="mf">0.3</span><span class="kt">rem</span><span class="w"> </span><span class="mf">0.6</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">border-bottom</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="kt">px</span><span class="w"> </span><span class="kc">solid</span><span class="w"> </span><span class="mh">#ddd</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">num</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">text-align</span><span class="p">:</span><span class="w"> </span><span class="kc">right</span><span class="p">;</span>
+<span class="w">		</span><span class="k">font-variant-numeric</span><span class="p">:</span><span class="w"> </span><span class="n">tabular-nums</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">faded</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#888</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">style</span><span class="p">&gt;</span>
+</code></pre></div>
+</details>
+<p><strong>Why it was done this way, things to try, questions:</strong> <a href="https://github.com/AlpinistPanda/flood-twin-lab/blob/main/STEPS.md#step-4--live-updates-and-a-feed-lost-indicator--step-4">STEPS.md, step 4</a>.</p>
+<hr />
+<h2 id="walkthrough-step-4-in-small-pieces-with-all-the-code">Walkthrough: step 4 in small pieces, with all the code</h2>
+<p>Everything happens in <code>app/src/routes/+page.svelte</code>.</p>
+<h3 id="4a--a-fetch-that-gives-up">4.A · A fetch that gives up</h3>
+<p>At the top of the script, after the imports:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">POLL_MS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">10</span><span class="nx">_000</span><span class="p">;</span><span class="w"> </span><span class="c1">// ask the API every 10 s (= 10 minutes of replayed data)</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">TIMEOUT_MS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">5</span><span class="nx">_000</span><span class="p">;</span><span class="w"> </span><span class="c1">// give up on a request that takes longer than this</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">FEED_LOST_AFTER_MS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">30</span><span class="nx">_000</span><span class="p">;</span><span class="w"> </span><span class="c1">// no good answer for this long: the feed is lost</span>
+</code></pre></div>
+<p>and after <code>readingFor</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="c1">// Fetch JSON, but never wait forever: a hanging server must count as a failure too.</span>
+<span class="w">	</span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">getJSON</span><span class="p">(</span><span class="nx">url</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="nx">res</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="nx">url</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">signal</span><span class="o">:</span><span class="w"> </span><span class="nx">AbortSignal</span><span class="p">.</span><span class="nx">timeout</span><span class="p">(</span><span class="nx">TIMEOUT_MS</span><span class="p">)</span><span class="w"> </span><span class="p">});</span>
+<span class="w">		</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">res</span><span class="p">.</span><span class="nx">ok</span><span class="p">)</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="ne">Error</span><span class="p">(</span><span class="sb">`</span><span class="si">${</span><span class="nx">url</span><span class="si">}</span><span class="sb"> answered </span><span class="si">${</span><span class="nx">res</span><span class="p">.</span><span class="nx">status</span><span class="si">}</span><span class="sb">`</span><span class="p">);</span>
+<span class="w">		</span><span class="k">return</span><span class="w"> </span><span class="nx">res</span><span class="p">.</span><span class="nx">json</span><span class="p">();</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<h3 id="4b--load-becomes-poll">4.B · <code>load</code> becomes <code>poll</code></h3>
+<p>Replace <code>let error = $state(null);</code> with the health of the feed:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">lastOk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span><span class="w"> </span><span class="c1">// when (browser clock) we last got a good answer</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">lastError</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span><span class="w"> </span><span class="c1">// what went wrong last time, if anything</span>
+</code></pre></div>
+<p>Replace the whole <code>load</code> function with:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">poll</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">sites</span><span class="p">.</span><span class="nx">length</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="mf">0</span><span class="p">)</span><span class="w"> </span><span class="nx">sites</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="k">await</span><span class="w"> </span><span class="nx">getJSON</span><span class="p">(</span><span class="s1">&#39;/api/sites&#39;</span><span class="p">)).</span><span class="nx">sites</span><span class="p">;</span><span class="w"> </span><span class="c1">// only once</span>
+<span class="w">			</span><span class="nx">live</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">getJSON</span><span class="p">(</span><span class="s1">&#39;/api/live&#39;</span><span class="p">);</span>
+<span class="w">			</span><span class="nx">updateLevels</span><span class="p">();</span>
+<span class="w">			</span><span class="nx">lastOk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Date</span><span class="p">.</span><span class="nx">now</span><span class="p">();</span>
+<span class="w">			</span><span class="nx">lastError</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="w">		</span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="nx">e</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="c1">// Keep the last good data on screen, but remember that this attempt failed.</span>
+<span class="w">			</span><span class="nx">lastError</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="nx">name</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;TimeoutError&#39;</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;the API did not answer in time&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="nx">message</span><span class="p">;</span>
+<span class="w">		</span><span class="p">}</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p>Rename the other uses: <code>onMount(poll)</code>, and the button <code>onclick={poll}</code>. Replace the old error message in the HTML:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>	{#if lastError}
+		<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;error&quot;</span><span class="p">&gt;</span>{lastError}<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+	{/if}
+</code></pre></div>
+<p><strong>You see:</strong> the same page as before. Stop the API and press <strong>Refresh</strong>: <em>/api/live answered 502</em>, and the table <strong>keeps</strong> the last data. Start the API again.</p>
+<h3 id="4c--poll-by-itself">4.C · Poll by itself</h3>
+<p>Replace <code>onMount(poll);</code> with a loop that waits for each answer before it schedules the next request:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">polling</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">true</span><span class="p">);</span><span class="w"> </span><span class="c1">// the Pause / Resume button</span>
+
+<span class="w">	</span><span class="nx">onMount</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="kd">let</span><span class="w"> </span><span class="nx">timer</span><span class="p">;</span>
+<span class="w">		</span><span class="kd">let</span><span class="w"> </span><span class="nx">stopped</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+
+<span class="w">		</span><span class="c1">// Poll, wait, poll again. We wait for each answer before scheduling the next request</span>
+<span class="w">		</span><span class="c1">// (setTimeout, not setInterval), so a slow API never piles up requests.</span>
+<span class="w">		</span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">tick</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">polling</span><span class="p">)</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">poll</span><span class="p">();</span>
+<span class="w">			</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">stopped</span><span class="p">)</span><span class="w"> </span><span class="nx">timer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">setTimeout</span><span class="p">(</span><span class="nx">tick</span><span class="p">,</span><span class="w"> </span><span class="nx">POLL_MS</span><span class="p">);</span>
+<span class="w">		</span><span class="p">}</span>
+<span class="w">		</span><span class="nx">tick</span><span class="p">();</span>
+
+<span class="w">		</span><span class="c1">// Clean up when the page goes away, or the timer keeps running.</span>
+<span class="w">		</span><span class="k">return</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="nx">stopped</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
+<span class="w">			</span><span class="nx">clearTimeout</span><span class="p">(</span><span class="nx">timer</span><span class="p">);</span>
+<span class="w">		</span><span class="p">};</span>
+<span class="w">	</span><span class="p">});</span>
+</code></pre></div>
+<p>Replace the <em>Refresh</em> button with two:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>		<span class="p">&lt;</span><span class="nt">button</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{()</span> <span class="err">=</span><span class="p">&gt;</span> (polling = !polling)}&gt;{polling ? &#39;Pause&#39; : &#39;Resume&#39;}<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">button</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{poll}</span><span class="p">&gt;</span>Update now<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+</code></pre></div>
+<p><strong>You see:</strong> don't touch anything: every 10 s the sensor time jumps 10 minutes. <strong>Network</strong> tab (F12): one <code>/api/live</code> every 10 s. <strong>Pause</strong> stops it.</p>
+<h3 id="4d--a-clock-and-the-feed-status">4.D · A clock and the feed status</h3>
+<p>The status depends on <strong>how long ago</strong> the last good answer was, so the page needs a clock that is state. Add:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">now</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="nb">Date</span><span class="p">.</span><span class="nx">now</span><span class="p">());</span><span class="w"> </span><span class="c1">// ticks every second, so &quot;… s ago&quot; stays up to date</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">feed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span>
+<span class="w">		</span><span class="nx">lastOk</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span>
+<span class="w">			</span><span class="o">?</span><span class="w"> </span><span class="nx">lastError</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;lost&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;connecting&#39;</span>
+<span class="w">			</span><span class="o">:</span><span class="w"> </span><span class="o">!</span><span class="nx">lastError</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;live&#39;</span>
+<span class="w">			</span><span class="o">:</span><span class="w"> </span><span class="nx">now</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">lastOk</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="nx">FEED_LOST_AFTER_MS</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;delayed&#39;</span>
+<span class="w">			</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;lost&#39;</span>
+<span class="w">	</span><span class="p">);</span>
+
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">secondsAgo</span><span class="p">(</span><span class="nx">t</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">return</span><span class="w"> </span><span class="nb">Math</span><span class="p">.</span><span class="nx">round</span><span class="p">((</span><span class="nx">now</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">t</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">1000</span><span class="p">);</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p>In <code>onMount</code>, after <code>tick();</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="nx">clock</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">setInterval</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">(</span><span class="nx">now</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Date</span><span class="p">.</span><span class="nx">now</span><span class="p">()),</span><span class="w"> </span><span class="mf">1000</span><span class="p">);</span>
+</code></pre></div>
+<p>and in the clean-up function, add <code>clearInterval(clock);</code>.</p>
+<h3 id="4e--the-status-line">4.E · The status line</h3>
+<p>Replace the paragraph with <em>Sensor time</em> and the buttons by:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>	<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;status&quot;</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">span</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;feed {feed}&quot;</span><span class="p">&gt;</span>●<span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>
+		{#if feed === &#39;connecting&#39;}
+			Connecting to the sensor feed …
+		{:else if feed === &#39;live&#39;}
+			<span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>Live<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span> · sensor time {showTime(live?.time)} IST · updated {secondsAgo(lastOk)} s ago
+		{:else if feed === &#39;delayed&#39;}
+			<span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>Delayed<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span> · last update {secondsAgo(lastOk)} s ago, retrying
+		{:else}
+			<span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>Feed lost<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span> · {lastError}
+		{/if}
+		<span class="p">&lt;</span><span class="nt">button</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{()</span> <span class="err">=</span><span class="p">&gt;</span> (polling = !polling)}&gt;{polling ? &#39;Pause&#39; : &#39;Resume&#39;}<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">button</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{poll}</span><span class="p">&gt;</span>Update now<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+	<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+</code></pre></div>
+<p>Delete the <code>{#if lastError}</code> error paragraph: the status line says it now. Styles:</p>
+<div class="code" data-lang="css"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="p">.</span><span class="nc">status</span><span class="w"> </span><span class="nt">button</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">margin-left</span><span class="p">:</span><span class="w"> </span><span class="mf">0.4</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">feed</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">1.1</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">feed</span><span class="p">.</span><span class="nc">connecting</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#b0b0b0</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">feed</span><span class="p">.</span><span class="nc">live</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#2e7d32</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">feed</span><span class="p">.</span><span class="nc">delayed</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#ef6c00</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">feed</span><span class="p">.</span><span class="nc">lost</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#c62828</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p><strong>You see:</strong> a green ● <em>Live · sensor time … · updated 4 s ago</em>, counting. Stop the API: within 10 s orange <em>Delayed</em>, after 30 s red <em>Feed lost</em>. Start it: green again, without reloading.</p>
+<h3 id="4f--say-it-loudly-when-the-feed-is-lost">4.F · Say it loudly when the feed is lost</h3>
+<p>Under the status line:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>	{#if feed === &#39;lost&#39;}
+		<span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;banner lost&quot;</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>No data from the sensors{lastOk ? ` for ${secondsAgo(lastOk)} s` : &#39;&#39;}.<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span>
+			{#if live}
+				The map shows the last known levels, from {showTime(live.time)} IST. They may be out of date.
+			{/if}
+		<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+	{/if}
+</code></pre></div>
+<div class="code" data-lang="css"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="p">.</span><span class="nc">banner</span><span class="p">.</span><span class="nc">lost</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">background</span><span class="p">:</span><span class="w"> </span><span class="mh">#333</span><span class="p">;</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#fff</span><span class="p">;</span>
+<span class="w">		</span><span class="k">border-left-color</span><span class="p">:</span><span class="w"> </span><span class="mh">#c62828</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<h3 id="4g--the-alert-banner-must-not-lie">4.G · The alert banner must not lie</h3>
+<p>In the alert banner, change the heading and add a case between the alerts and <em>No flood warnings</em>:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>			{#if alerts.length &gt; 0}
+				<span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>
+					{feed === &#39;lost&#39; ? &#39;Last known: &#39; : &#39;&#39;}{alerts.length}
+					{alerts.length === 1 ? &#39;sensor&#39; : &#39;sensors&#39;} at warning or danger:
+				<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span>
+				{#each alerts as site, i (site.id)}
+					{i &gt; 0 ? &#39;, &#39; : &#39;&#39;}{site.id} ({readingFor(site.id).depth_m} m)
+				{/each}
+			{:else if feed === &#39;lost&#39;}
+				<span class="cm">&lt;!-- &quot;No warnings&quot; while the feed is down would be a false all-clear. --&gt;</span>
+				<span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>Flood warnings unknown: the feed is lost.<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span>
+			{:else}
+				<span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>No flood warnings.<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span>
+			{/if}
+</code></pre></div>
+<h3 id="4h--grey-out-what-may-be-old">4.H · Grey out what may be old</h3>
+<p>Wrap the map:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>	<span class="p">&lt;</span><span class="nt">div</span> <span class="na">class:faded-map</span><span class="o">=</span><span class="s">{feed</span> <span class="err">===</span> <span class="err">&#39;</span><span class="na">lost</span><span class="err">&#39;}</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">MapLibreMap</span> <span class="err">{</span><span class="na">geojson</span><span class="err">}</span> <span class="p">/&gt;</span>
+	<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+</code></pre></div>
+<div class="code" data-lang="css"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="c">/* Feed lost: grey the map out, so nobody mistakes old colours for the current situation. */</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">faded-map</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">filter</span><span class="p">:</span><span class="w"> </span><span class="nb">grayscale</span><span class="p">(</span><span class="mf">0.9</span><span class="p">)</span><span class="w"> </span><span class="nb">opacity</span><span class="p">(</span><span class="mf">0.6</span><span class="p">);</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p>and the table: <code>&lt;table class:faded={feed === 'lost'}&gt;</code>.</p>
+<p><strong>You see:</strong> stop the API and wait 30 s: dark banner, <em>Last known: …</em> (or <em>Flood warnings unknown</em>), a grey map, a grey table. Start the API: everything back within 10 s. That's the reference of this step. Commit.</p>
+<hr />
+<p><a href="05-pages-layers.html">Step 5 · Pages and layers →</a></p>
+
+    </article>
+    <nav class="next" aria-label="Previous and next"><a class="prev" href="03-thresholds.html"><span>Previous</span>3 · Thresholds and alerts</a><a class="nxt" href="05-pages-layers.html"><span>Next</span>5 · Pages and layers</a></nav>
+  </main>
+  <nav class="toc" aria-label="On this page"><p>On this page</p><ol><li><a href="#why-this-matters">Why this matters</a></li><li><a href="#41--never-wait-forever">4.1 · Never wait forever</a></li><li><a href="#42--poll-dont-load">4.2 · Poll, don't load</a></li><li><a href="#43--ask-again-every-10-seconds">4.3 · Ask again every 10 seconds</a></li><li><a href="#44--live-delayed-or-lost">4.4 · Live, delayed or lost?</a></li><li><a href="#45--say-it-on-screen">4.5 · Say it on screen</a></li><li><a href="#check">Check</a></li><li><a href="#stuck">Stuck?</a></li><li><a href="#walkthrough-step-4-in-small-pieces-with-all-the-code">Walkthrough: step 4 in small pieces, with all the code</a></li></ol></nav>
+</div>
+<script src="assets/guide.js"></script>
+</body>
+</html>

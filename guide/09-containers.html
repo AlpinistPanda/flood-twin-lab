@@ -1,0 +1,850 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 9 · The whole twin in containers · Flood twin build guide</title>
+<link rel="stylesheet" href="assets/guide.css">
+<script>try{const t=localStorage.getItem('guide-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header class="top">
+  <button class="menu" type="button" aria-label="Show steps" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">Flood twin <span>build guide</span></a>
+  <a class="repo" href="https://github.com/AlpinistPanda/flood-twin-lab">GitHub</a>
+  <button class="theme" type="button" aria-label="Switch light or dark">◐</button>
+</header>
+<div class="layout">
+  <aside class="side"><nav aria-label="Steps"><ol><li><a href="index.html">Overview</a></li><li><a href="00-sveltekit.html">0 · An empty SvelteKit app</a></li><li><a href="01-feed-table.html">1 · The live feed as a table</a></li><li><a href="02-maplibre.html">2 · Sensors on a map</a></li><li><a href="03-thresholds.html">3 · Thresholds and alerts</a></li><li><a href="04-live.html">4 · Live updates</a></li><li><a href="05-pages-layers.html">5 · Pages and layers</a></li><li><a href="06-charts.html">6 · Charts in the popup</a></li><li><a href="07-flood-layers.html">7 · Flood raster and vector</a></li><li><a href="08-flood-time.html">8 · The flood over time</a></li><li><a href="09-containers.html" aria-current="page">9 · Containers</a></li><li><a href="api.html">The sensor API</a></li></ol></nav></aside>
+  <main>
+    <article>
+<h1 id="step-9--the-whole-twin-in-containers">Step 9 · The whole twin in containers</h1>
+<p class="pager"><a href="08-flood-time.html">← Step 8</a> · <a href="index.html">Guide overview</a></p>
+<p><strong>You build:</strong> a production version of the twin, packaged as two Docker images and started with <strong>one command</strong>: <code>docker compose up --build</code>. Then you break it on purpose, and load it with 1,000 simulated users.
+<strong>You learn:</strong> building a SvelteKit app into plain files; nginx as web server and proxy; Dockerfiles (layers, caching, multi-stage builds, health checks); Docker Compose (services, networks, restart policies, profiles).
+<strong>Time:</strong> about 75 minutes.
+<strong>Start from:</strong> your step 8, or the tag <code>step-8</code>. In a Codespace, Docker is already installed. On a laptop, start Docker Desktop.</p>
+<hr />
+<h2 id="development-vs-production">Development vs production</h2>
+<p>Until now the twin ran in <strong>development mode</strong>: two terminals, a dev server that rebuilds on every save, a proxy you configured in Vite. Good for building, not for a city: it needs Node.js, it's slow to start, and it depends on your terminals staying open.</p>
+<p>In production:</p>
+<div class="code" data-lang=""><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>                         ┌──────────── docker compose: one private network ────────────┐
+browser ── port 8080 ──▶ │  app  nginx: the built app, the flood layers                │
+                         │       /api/…  ──▶  api  Python: the sensor API + its data   │
+                         └─────────────────────────────────────────────────────────────┘
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Development (steps 0–8)</th>
+<th>Production (this step)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>npm run dev</code>: Vite serves the source, rebuilds on save</td>
+<td><code>npm run build</code> once: plain HTML, JS and CSS files</td>
+</tr>
+<tr>
+<td>Vite's <code>proxy</code> passes <code>/api</code> on</td>
+<td><strong>nginx</strong> serves the files and passes <code>/api</code> on</td>
+</tr>
+<tr>
+<td><code>python api/main.py</code> in a terminal</td>
+<td>The API in its own <strong>container</strong></td>
+</tr>
+<tr>
+<td>Two terminals you keep open</td>
+<td><code>docker compose up</code>: both, restarted when they crash</td>
+</tr>
+</tbody>
+</table>
+<p>A <strong>Docker image</strong> is a frozen machine: an operating system, the programs, your code and your data, built from a recipe called a <strong>Dockerfile</strong>. A <strong>container</strong> is that image running. <strong>Docker Compose</strong> starts several containers together from one file, and puts them on a private network where they find each other by name.</p>
+<p>Stop both terminals from step 8 (Ctrl+C). The twin will run in Docker from now on.</p>
+<h2 id="91--build-the-app-into-plain-files">9.1 · Build the app into plain files</h2>
+<p>SvelteKit uses an <strong>adapter</strong> to decide what <code>npm run build</code> produces. <code>adapter-auto</code> (what <code>sv</code> gave you) guesses a hosting platform. We want plain files that any web server can serve: <strong><code>adapter-static</code></strong>. In <code>app/</code>:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>npm<span class="w"> </span>uninstall<span class="w"> </span>@sveltejs/adapter-auto
+npm<span class="w"> </span>install<span class="w"> </span>-D<span class="w"> </span>@sveltejs/adapter-static@4.0.1
+</code></pre></div>
+<p>In <code>vite.config.js</code>, change the import to <code>@sveltejs/adapter-static</code>, and the adapter line to:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="nx">adapter</span><span class="o">:</span><span class="w"> </span><span class="nx">adapter</span><span class="p">({</span><span class="w"> </span><span class="nx">fallback</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;index.html&#39;</span><span class="w"> </span><span class="p">})</span>
+</code></pre></div>
+<p><strong>Why <code>fallback</code>?</strong> There is no file for <code>/maplibre</code> or <code>/sensors</code>: every page is made in the browser (<code>ssr = false</code>, step 5). The fallback is one <code>index.html</code> that starts the app, and the app shows the right page for the address. nginx will answer every unknown address with it (9.3).</p>
+<p><strong>Try it:</strong></p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>npm<span class="w"> </span>run<span class="w"> </span>build
+ls<span class="w"> </span>build
+</code></pre></div>
+<p><code>build/</code> has <code>index.html</code>, <code>_app/</code> (the JavaScript and CSS) and your <code>layers/</code>. That folder is the whole app.</p>
+<h2 id="92--the-maplibre-worker-in-the-build">9.2 · The MapLibre worker in the build</h2>
+<p>There's a catch that only shows up in production. MapLibre loads its <strong>web worker</strong> from a separate file next to its own code (step 2). The dev server serves that file straight from <code>node_modules</code>. The production build bundles MapLibre into new files and leaves the worker file behind: the map stays empty, with an error in the console.</p>
+<p>The fix: ask Vite to copy the worker file into the build and give you its address (<code>?url</code>), and tell MapLibre where it is. Create <strong><code>app/src/lib/maplibre-worker.js</code></strong>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">setWorkerUrl</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;maplibre-gl&#39;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="nx">workerUrl</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;maplibre-gl/dist/maplibre-gl-worker.mjs?url&#39;</span><span class="p">;</span>
+
+<span class="nx">setWorkerUrl</span><span class="p">(</span><span class="nx">workerUrl</span><span class="p">);</span>
+</code></pre></div>
+<p>and import it at the top of <code>MapLibreMap.svelte</code>, before the map is made:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">import</span><span class="w"> </span><span class="s1">&#39;#lib/maplibre-worker.js&#39;</span><span class="p">;</span>
+</code></pre></div>
+<h2 id="93--nginx-what-the-dev-server-did">9.3 · nginx: what the dev server did</h2>
+<p><strong>nginx</strong> is a small, fast web server. It does what Vite did in development: serve the app, and pass <code>/api/…</code> on to the API. Create <strong><code>app/nginx.conf</code></strong> step by step.</p>
+<p><strong>a · The server and the app's files.</strong> Every address that is not a file gets <code>index.html</code> (the fallback from 9.1):</p>
+<div class="code" data-lang="nginx"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">server</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">80</span><span class="p">;</span>
+<span class="w">    </span><span class="kn">root</span><span class="w"> </span><span class="s">/usr/share/nginx/html</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">try_files</span><span class="w"> </span><span class="nv">$uri</span><span class="w"> </span><span class="nv">$uri/</span><span class="w"> </span><span class="s">/index.html</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>b · The proxy.</strong> Inside the Compose network, the API is reachable by its service name: <code>http://api:8000</code>. Strip <code>/api</code> like Vite's <code>rewrite</code> did:</p>
+<div class="code" data-lang="nginx"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">    </span><span class="k">resolver</span><span class="w"> </span><span class="mi">127</span><span class="s">.0.0.11</span><span class="w"> </span><span class="s">valid=10s</span><span class="p">;</span>
+<span class="w">    </span><span class="k">set</span><span class="w"> </span><span class="nv">$api</span><span class="w"> </span><span class="s">http://api:8000</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">location</span><span class="w"> </span><span class="s">/api/</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">rewrite</span><span class="w"> </span><span class="s">^/api/(.*)</span>$<span class="w"> </span><span class="s">/</span><span class="nv">$1</span><span class="w"> </span><span class="s">break</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="nv">$api</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_read_timeout</span><span class="w"> </span><span class="s">10s</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+<p>Why the <code>resolver</code> and the variable, instead of simply <code>proxy_pass http://api:8000</code>? With a fixed name, nginx looks up the API's address <strong>once</strong>, when it starts. It then refuses to start while the API is down, taking the whole twin offline, and it would keep using an old address if a recreated API container got a new one. <code>127.0.0.11</code> is Docker's own name server; with a variable, nginx asks it again every 10 seconds.</p>
+<p><strong>c · File types.</strong> nginx doesn't know <code>.mjs</code> (the MapLibre worker, 9.2) and would send it as a download, which browsers refuse to run as a worker:</p>
+<div class="code" data-lang="nginx"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">    </span><span class="k">location</span><span class="w"> </span><span class="p">~</span><span class="w"> </span><span class="sr">\.mjs$</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">types</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+<span class="w">        </span><span class="kn">default_type</span><span class="w"> </span><span class="s">application/javascript</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">try_files</span><span class="w"> </span><span class="nv">$uri</span><span class="w"> </span><span class="p">=</span><span class="mi">404</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+<p><strong>d · The flood layers and caching.</strong> Browsers keep copies of files. For the layers, tell them to <strong>check</strong> each time whether the file has changed (<code>no-cache</code>; nginx answers <em>304 Not Modified</em> when it hasn't, which is almost free). For the COGs, keep <strong>no</strong> copy (<code>no-store</code>): with an old copy, the browser asks for a piece &quot;only if the file hasn't changed&quot;, and after a rebuild nginx answers with the whole 17 MB file instead, which the COG plugin can't use.</p>
+<div class="code" data-lang="nginx"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">    </span><span class="k">location</span><span class="w"> </span><span class="s">/layers/</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">types</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kn">image/tiff</span><span class="w"> </span><span class="s">tif</span><span class="p">;</span>
+<span class="w">            </span><span class="kn">application/geo+json</span><span class="w"> </span><span class="s">geojson</span><span class="p">;</span>
+<span class="w">            </span><span class="kn">application/json</span><span class="w"> </span><span class="s">json</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="kn">add_header</span><span class="w"> </span><span class="s">Cache-Control</span><span class="w"> </span><span class="s">&quot;no-cache&quot;</span><span class="p">;</span>
+
+<span class="w">        </span><span class="kn">location</span><span class="w"> </span><span class="p">~</span><span class="w"> </span><span class="sr">\.tif$</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kn">add_header</span><span class="w"> </span><span class="s">Cache-Control</span><span class="w"> </span><span class="s">&quot;no-store&quot;</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+<p><strong>e · Compression</strong> of text files (not the <code>.tif</code>, which is already compressed):</p>
+<div class="code" data-lang="nginx"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">    </span><span class="k">gzip</span><span class="w"> </span><span class="no">on</span><span class="p">;</span>
+<span class="w">    </span><span class="k">gzip_types</span><span class="w"> </span><span class="s">application/json</span><span class="w"> </span><span class="s">application/geo+json</span><span class="w"> </span><span class="s">application/javascript</span><span class="w"> </span><span class="s">text/css</span><span class="p">;</span>
+</code></pre></div>
+<p>All of b–e go inside the <code>server { … }</code> block.</p>
+<h2 id="94--the-app-image-appdockerfile">9.4 · The app image: <code>app/Dockerfile</code></h2>
+<p>Building the app needs Node.js and 200 MB of <code>node_modules</code>. Serving it needs only nginx and the <code>build/</code> folder. A <strong>multi-stage</strong> Dockerfile does both, and keeps only the second:</p>
+<div class="code" data-lang="dockerfile"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c"># Stage 1: build</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">node:26-slim</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="s">build</span>
+<span class="k">WORKDIR</span><span class="w"> </span><span class="s">/app</span>
+<span class="k">COPY</span><span class="w"> </span>package.json<span class="w"> </span>package-lock.json<span class="w"> </span>./
+<span class="k">RUN</span><span class="w"> </span>npm<span class="w"> </span>ci
+<span class="k">COPY</span><span class="w"> </span>.<span class="w"> </span>.
+<span class="k">RUN</span><span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>build
+
+<span class="c"># Stage 2: serve</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">nginx:1-alpine</span>
+<span class="k">COPY</span><span class="w"> </span>nginx.conf<span class="w"> </span>/etc/nginx/conf.d/default.conf
+<span class="k">COPY</span><span class="w"> </span>--from<span class="o">=</span>build<span class="w"> </span>/app/build<span class="w"> </span>/usr/share/nginx/html
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">80</span>
+</code></pre></div>
+<p>Every line is a <strong>layer</strong> that Docker caches. The order matters: <code>package.json</code> is copied and <code>npm ci</code> runs <strong>before</strong> the rest of the code. As long as your packages don't change, a rebuild skips the slow <code>npm ci</code>, even when you change your code. (<code>npm ci</code> installs exactly what <code>package-lock.json</code> says.)</p>
+<p><strong><code>app/.dockerignore</code></strong>: what <code>COPY . .</code> must not copy. Your local <code>node_modules</code> and <code>build</code> are big, and rebuilt inside the image anyway:</p>
+<div class="code" data-lang=""><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>node_modules
+build
+.svelte-kit
+</code></pre></div>
+<p><strong>Try it</strong>, in <code>app/</code>:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>flood-twin-app:test<span class="w"> </span>.
+docker<span class="w"> </span>images<span class="w"> </span>flood-twin-app
+</code></pre></div>
+<p>About 140 MB: the Node.js stage is gone.</p>
+<h2 id="95--the-api-image-apidockerfile">9.5 · The API image: <code>api/Dockerfile</code></h2>
+<p>The API isn't yours, but packaging it is part of deploying the twin. It needs <code>api/</code> <strong>and</strong> <code>data/</code>, so it's built from the repository folder (the <strong>context</strong>), and its Dockerfile lives in <code>api/</code>. Write it yourself, with these steps:</p>
+<ol>
+<li>
+<p>Start from <code>python:3.15-slim</code>; work in <code>/srv</code>.</p>
+</li>
+<li>
+<p>Copy <code>api/requirements.txt</code> and <code>pip install --no-cache-dir -r</code> it <strong>first</strong> (caching, as in 9.4).</p>
+</li>
+<li>
+<p>Copy <code>data/</code> and <code>api/</code>. The data goes <strong>inside</strong> the image: everyone who runs it replays exactly the same 30 days.</p>
+</li>
+<li>
+<p>Don't run as root: <code>RUN useradd --create-home twin</code> and <code>USER twin</code>.</p>
+</li>
+<li>
+<p><code>EXPOSE 8000</code>.</p>
+</li>
+<li>
+<p>A <strong>health check</strong>, so Docker knows when the API is actually ready, not just started. The slim image has no <code>curl</code>, so use Python:</p>
+<div class="code" data-lang="dockerfile"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">HEALTHCHECK</span><span class="w"> </span>--interval<span class="o">=</span>10s<span class="w"> </span>--timeout<span class="o">=</span>3s<span class="w"> </span>--start-period<span class="o">=</span>10s<span class="w"> </span>--retries<span class="o">=</span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>CMD<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import urllib.request; urllib.request.urlopen(&#39;http://localhost:8000/health&#39;, timeout=2)&quot;</span>
+</code></pre></div>
+</li>
+<li>
+<p>Start it: <code>CMD [&quot;python&quot;, &quot;api/main.py&quot;]</code>.</p>
+</li>
+</ol>
+<p><strong><code>.dockerignore</code></strong> in the <strong>repository folder</strong>: the context is the whole repository, including <code>app/node_modules</code>. Ignore everything except what the API needs:</p>
+<div class="code" data-lang=""><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>*
+!api/
+!data/
+</code></pre></div>
+<h2 id="96--the-whole-twin-docker-composeyml">9.6 · The whole twin: <code>docker-compose.yml</code></h2>
+<p>In the repository folder. Two services:</p>
+<div class="code" data-lang="yaml"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="nt">services</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">api</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">build</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">context</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">.</span>
+<span class="w">      </span><span class="nt">dockerfile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">api/Dockerfile</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">flood-twin-api:1.0</span>
+<span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">REPLAY_START</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${REPLAY_START:-2026-11-04T03:00}</span>
+<span class="w">      </span><span class="nt">REPLAY_SPEED</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${REPLAY_SPEED:-60}</span>
+<span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unless-stopped</span>
+
+<span class="w">  </span><span class="nt">app</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">build</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./app</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">flood-twin-app:1.0</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8080:80&quot;</span>
+<span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">api</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">condition</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">service_healthy</span>
+<span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unless-stopped</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Line</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>build</code> / <code>image</code></td>
+<td>Build the image from this Dockerfile, and give it this name and version</td>
+</tr>
+<tr>
+<td><code>environment</code></td>
+<td><code>${REPLAY_START:-…}</code>: the value from your terminal if you set one, otherwise the default</td>
+</tr>
+<tr>
+<td><code>restart: unless-stopped</code></td>
+<td>When the program crashes, Docker starts it again. Unless <em>you</em> stopped it</td>
+</tr>
+<tr>
+<td><code>ports: &quot;8080:80&quot;</code></td>
+<td>Port 8080 on your machine goes to port 80 in the container. The <code>api</code> service has <strong>no</strong> <code>ports</code>: nobody outside can reach it, only <code>app</code>, over the private network. One public door, not two</td>
+</tr>
+<tr>
+<td><code>depends_on … service_healthy</code></td>
+<td>Start <code>app</code> only when the API's health check passes</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The load test</strong> is a third, optional service. <code>profiles</code> keeps it out of a normal <code>docker compose up</code>:</p>
+<div class="code" data-lang="yaml"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">  </span><span class="nt">loadtest</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">locustio/locust:2.47.0</span>
+<span class="w">    </span><span class="nt">profiles</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">loadtest</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./loadtest:/mnt/locust</span>
+<span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">-f /mnt/locust/locustfile.py --host http://app</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8089:8089&quot;</span>
+<span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">app</span>
+</code></pre></div>
+<p><code>volumes</code> makes the folder <code>loadtest/</code> (already in the repository) visible inside the container. Read <code>loadtest/locustfile.py</code>: each simulated user behaves like your app.</p>
+<h2 id="97--run-it">9.7 · Run it</h2>
+<p>In the repository folder:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>--build
+</code></pre></div>
+<p>The first build downloads Python, Node.js and nginx, and takes a few minutes. When the log goes quiet, open port <strong>8080</strong>: your twin, from containers. In a second terminal:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>docker<span class="w"> </span>compose<span class="w"> </span>ps<span class="w">                  </span><span class="c1"># both services; the API should say (healthy)</span>
+docker<span class="w"> </span>images<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>flood-twin<span class="w">    </span><span class="c1"># your two images and their size</span>
+</code></pre></div>
+<h2 id="98--break-it-then-load-it">9.8 · Break it, then load it</h2>
+<p><strong>Stop the API</strong> (an operator's mistake):</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>api
+</code></pre></div>
+<p>The app goes <em>Delayed</em>, then <em>Feed lost</em> (step 4). <code>docker compose start api</code>: <em>Live</em> again within 10 s, without reloading the page, and without restarting nginx (that's the <code>resolver</code>, 9.3b).</p>
+<p><strong>Crash the API</strong> (a bug):</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>api<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import os, signal; os.kill(1, signal.SIGTERM)&quot;</span>
+docker<span class="w"> </span>compose<span class="w"> </span>ps
+</code></pre></div>
+<p>It comes back by itself: <code>restart: unless-stopped</code>.</p>
+<p><strong>Load it:</strong></p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>loadtest<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>loadtest
+</code></pre></div>
+<p>Open port <strong>8089</strong>: 1,000 users, spawn rate 100, <strong>Start</strong>. After a minute, look at the <strong>Statistics</strong>: which request is slowest, and why? Then give the API a quarter of a CPU: in <code>docker-compose.yml</code>, on the line <strong>below the API's <code>image:</code> line</strong>, add <code>cpus: 0.25</code> (same indentation), run <code>docker compose up -d api</code>, and run the test again. Stop Locust with <code>docker compose stop loadtest</code>.</p>
+<p><strong>Clean up:</strong> <code>docker compose down</code>.</p>
+<h2 id="check">Check</h2>
+<ul>
+<li>[ ] <code>docker compose up --build</code> starts both services; <code>docker compose ps</code> shows the API as <em>healthy</em>.</li>
+<li>[ ] Port 8080: the map with sensors, <em>Live</em>, both pages, the popup charts, both flood layers and the time bar. No errors in the console.</li>
+<li>[ ] <code>docker images</code>: the app image is about 140 MB.</li>
+<li>[ ] Port 8000 is <strong>not</strong> reachable from your browser while only Docker runs: the API is private.</li>
+<li>[ ] Stopping and crashing the API behave as in 9.8.</li>
+<li>[ ] <code>curl -I http://localhost:8080/layers/depth_timeseries_100yr.tif</code> shows <code>Cache-Control: no-store</code>.</li>
+</ul>
+<p>Commit your work. You've built the whole twin.</p>
+<h2 id="stuck">Stuck?</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Try</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The map is empty on port 8080, console: <em>worker</em> or <em>MIME type</em> errors</td>
+<td>9.2 (<code>setWorkerUrl</code>) and 9.3c (<code>.mjs</code>)</td>
+</tr>
+<tr>
+<td><code>/maplibre</code> gives <em>404 Not Found</em> after a reload</td>
+<td><code>try_files … /index.html</code> in nginx, and <code>fallback: 'index.html'</code> in the adapter</td>
+</tr>
+<tr>
+<td><em>Feed lost</em> from the start, nginx log says <code>host not found</code> or <code>502</code></td>
+<td>Is the service called <code>api</code> in the Compose file? Is the <code>resolver</code> line there?</td>
+</tr>
+<tr>
+<td><code>app</code> never starts: <em>dependency failed to start: container … is unhealthy</em></td>
+<td>The health check fails: <code>docker compose logs api</code>. Is the API listening on <code>0.0.0.0</code>, port 8000?</td>
+</tr>
+<tr>
+<td><code>npm ci</code> fails: <em>package-lock.json … not in sync</em></td>
+<td>Run <code>npm install</code> in <code>app/</code> and commit the new <code>package-lock.json</code></td>
+</tr>
+<tr>
+<td>The build is slow every time</td>
+<td><code>.dockerignore</code> is missing: Docker sends <code>node_modules</code> to the build each time</td>
+</tr>
+<tr>
+<td>The flood layer stays empty after a rebuild</td>
+<td>Reload the page once; check the <code>no-store</code> rule for <code>.tif</code></td>
+</tr>
+</tbody>
+</table>
+<p>Compare: <code>git diff step-9 -- app docker-compose.yml api/Dockerfile .dockerignore</code>.</p>
+<details>
+<summary>📄 <code>app/nginx.conf</code> as it is at <code>step-9</code></summary>
+<div class="code" data-lang="nginx"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c1"># Step 9: nginx does in production what the Vite dev server did in development:</span>
+<span class="c1"># serve the app, and pass /api/… on to the sensor API.</span>
+
+<span class="k">server</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">80</span><span class="p">;</span>
+<span class="w">    </span><span class="kn">root</span><span class="w"> </span><span class="s">/usr/share/nginx/html</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1"># Find the API by its name on the Compose network, and look the name up again every</span>
+<span class="w">    </span><span class="c1"># 10 s. Without this, nginx looks it up once at start: it refuses to start while the API</span>
+<span class="w">    </span><span class="c1"># is down, and keeps using an old address after the API container is recreated.</span>
+<span class="w">    </span><span class="kn">resolver</span><span class="w"> </span><span class="mi">127</span><span class="s">.0.0.11</span><span class="w"> </span><span class="s">valid=10s</span><span class="p">;</span>
+<span class="w">    </span><span class="kn">set</span><span class="w"> </span><span class="nv">$api</span><span class="w"> </span><span class="s">http://api:8000</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1"># /api/live → http://api:8000/live (the same as the proxy in vite.config.js)</span>
+<span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/api/</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">rewrite</span><span class="w"> </span><span class="s">^/api/(.*)</span>$<span class="w"> </span><span class="s">/</span><span class="nv">$1</span><span class="w"> </span><span class="s">break</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="nv">$api</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_read_timeout</span><span class="w"> </span><span class="s">10s</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1"># The flood layers (step 7). Browsers may keep a copy, but must ask &quot;has it changed?&quot; each</span>
+<span class="w">    </span><span class="c1"># time (&quot;no-cache&quot;); nginx answers &quot;304 Not Modified&quot; if not, which costs almost nothing.</span>
+<span class="w">    </span><span class="c1"># We first used &quot;max-age=3600&quot; (keep it for an hour without asking): after we updated a</span>
+<span class="w">    </span><span class="c1"># layer, browsers kept showing the old file for up to an hour. Files whose name never</span>
+<span class="w">    </span><span class="c1"># changes when their content does must be revalidated.</span>
+<span class="w">    </span><span class="c1"># nginx also answers HTTP range requests by itself, which the COG plugin needs.</span>
+<span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/layers/</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">types</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kn">image/tiff</span><span class="w"> </span><span class="s">tif</span><span class="p">;</span>
+<span class="w">            </span><span class="kn">application/geo+json</span><span class="w"> </span><span class="s">geojson</span><span class="p">;</span>
+<span class="w">            </span><span class="kn">application/json</span><span class="w"> </span><span class="s">json</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="kn">add_header</span><span class="w"> </span><span class="s">Cache-Control</span><span class="w"> </span><span class="s">&quot;no-cache&quot;</span><span class="p">;</span>
+
+<span class="w">        </span><span class="c1"># The COGs (.tif): keep no copy at all (&quot;no-store&quot;). The COG plugin asks for small pieces</span>
+<span class="w">        </span><span class="c1"># (range requests). With an old copy in its cache, the browser asks &quot;this piece, but only</span>
+<span class="w">        </span><span class="c1"># if the file hasn&#39;t changed&quot; (If-Range). After an update, or after rebuilding this</span>
+<span class="w">        </span><span class="c1"># container, the file has a new version tag, so nginx sends the WHOLE file instead,</span>
+<span class="w">        </span><span class="c1"># which the plugin can&#39;t use: the layer stays empty until the next reload. The plugin</span>
+<span class="w">        </span><span class="c1"># keeps the pieces it needs in memory, so nothing is lost by not caching them here.</span>
+<span class="w">        </span><span class="kn">location</span><span class="w"> </span><span class="p">~</span><span class="w"> </span><span class="sr">\.tif$</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kn">add_header</span><span class="w"> </span><span class="s">Cache-Control</span><span class="w"> </span><span class="s">&quot;no-store&quot;</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1"># MapLibre&#39;s web worker is a .mjs file. nginx doesn&#39;t know that extension and would send it</span>
+<span class="w">    </span><span class="c1"># as &quot;application/octet-stream&quot;; browsers refuse to run a worker that isn&#39;t JavaScript.</span>
+<span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="p">~</span><span class="w"> </span><span class="sr">\.mjs$</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">types</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+<span class="w">        </span><span class="kn">default_type</span><span class="w"> </span><span class="s">application/javascript</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">try_files</span><span class="w"> </span><span class="nv">$uri</span><span class="w"> </span><span class="p">=</span><span class="mi">404</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1"># Every other address is a page of the app: answer with index.html, the app does the rest.</span>
+<span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">try_files</span><span class="w"> </span><span class="nv">$uri</span><span class="w"> </span><span class="nv">$uri/</span><span class="w"> </span><span class="s">/index.html</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1"># Compress text on the way out (not the .tif: it is already compressed).</span>
+<span class="w">    </span><span class="kn">gzip</span><span class="w"> </span><span class="no">on</span><span class="p">;</span>
+<span class="w">    </span><span class="kn">gzip_types</span><span class="w"> </span><span class="s">application/json</span><span class="w"> </span><span class="s">application/geo+json</span><span class="w"> </span><span class="s">application/javascript</span><span class="w"> </span><span class="s">text/css</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+</details>
+<details>
+<summary>📄 <code>app/Dockerfile</code> as it is at <code>step-9</code></summary>
+<div class="code" data-lang="dockerfile"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c"># Step 9: the production image of the web app. Two stages:</span>
+<span class="c">#</span>
+<span class="c">#   build   a full Node.js environment that turns the SvelteKit app into plain files</span>
+<span class="c">#   serve   only nginx and those files: no Node.js, no node_modules, no source code</span>
+<span class="c">#</span>
+<span class="c"># The final image contains only the second stage, so it is small and has little to attack.</span>
+
+<span class="c"># ── Stage 1: build ────────────────────────────────────────────────────────────</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">node:26-slim</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="s">build</span>
+<span class="k">WORKDIR</span><span class="w"> </span><span class="s">/app</span>
+
+<span class="c"># Dependencies first, so Docker can cache them (see api/Dockerfile).</span>
+<span class="k">COPY</span><span class="w"> </span>package.json<span class="w"> </span>package-lock.json<span class="w"> </span>./
+<span class="k">RUN</span><span class="w"> </span>npm<span class="w"> </span>ci
+
+<span class="k">COPY</span><span class="w"> </span>.<span class="w"> </span>.
+<span class="k">RUN</span><span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>build
+
+<span class="c"># ── Stage 2: serve ────────────────────────────────────────────────────────────</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">nginx:1-alpine</span>
+<span class="k">COPY</span><span class="w"> </span>nginx.conf<span class="w"> </span>/etc/nginx/conf.d/default.conf
+<span class="k">COPY</span><span class="w"> </span>--from<span class="o">=</span>build<span class="w"> </span>/app/build<span class="w"> </span>/usr/share/nginx/html
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">80</span>
+</code></pre></div>
+</details>
+<details>
+<summary>📄 <code>app/.dockerignore</code> as it is at <code>step-9</code></summary>
+<div class="code" data-lang="gitignore"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code># Step 9: not needed in the build, and rebuilt inside the image anyway.
+node_modules
+build
+.svelte-kit
+</code></pre></div>
+</details>
+<details>
+<summary>📄 <code>api/Dockerfile</code> as it is at <code>step-9</code></summary>
+<div class="code" data-lang="dockerfile"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c"># Step 9: the production image of the sensor API.</span>
+<span class="c">#</span>
+<span class="c"># Built from the repository root (see docker-compose.yml), because it needs both api/ and data/.</span>
+<span class="c"># The data goes INSIDE the image: whoever runs this image gets exactly the same 30 days.</span>
+
+<span class="k">FROM</span><span class="w"> </span><span class="s">python:3.15-slim</span>
+
+<span class="k">WORKDIR</span><span class="w"> </span><span class="s">/srv</span>
+
+<span class="c"># 1. Dependencies first. Docker caches every step: as long as requirements.txt doesn&#39;t change,</span>
+<span class="c">#    a rebuild skips this (slow) step, even when you change the code.</span>
+<span class="k">COPY</span><span class="w"> </span>api/requirements.txt<span class="w"> </span>api/
+<span class="k">RUN</span><span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>--no-cache-dir<span class="w"> </span>-r<span class="w"> </span>api/requirements.txt
+
+<span class="c"># 2. Then the data and the code.</span>
+<span class="k">COPY</span><span class="w"> </span>data/<span class="w"> </span>data/
+<span class="k">COPY</span><span class="w"> </span>api/<span class="w"> </span>api/
+
+<span class="c"># 3. Don&#39;t run as root: if someone breaks into the API, they can&#39;t change the container.</span>
+<span class="k">RUN</span><span class="w"> </span>useradd<span class="w"> </span>--create-home<span class="w"> </span>twin
+<span class="k">USER</span><span class="w"> </span><span class="s">twin</span>
+
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">8000</span>
+
+<span class="c"># 4. How Docker knows the API is healthy (not just started): ask /health every 10 s.</span>
+<span class="k">HEALTHCHECK</span><span class="w"> </span>--interval<span class="o">=</span>10s<span class="w"> </span>--timeout<span class="o">=</span>3s<span class="w"> </span>--start-period<span class="o">=</span>10s<span class="w"> </span>--retries<span class="o">=</span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>CMD<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import urllib.request; urllib.request.urlopen(&#39;http://localhost:8000/health&#39;, timeout=2)&quot;</span>
+
+<span class="k">CMD</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;python&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;api/main.py&quot;</span><span class="p">]</span>
+</code></pre></div>
+</details>
+<details>
+<summary>📄 <code>.dockerignore</code> as it is at <code>step-9</code></summary>
+<div class="code" data-lang="gitignore"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code># Step 9: what Docker may see when it builds from the repository root (the API image).
+# Everything is ignored, except what the API needs. Without this file Docker would first copy
+# app/node_modules (hundreds of MB) to the build, and throw it away.
+*
+!api/
+!data/
+</code></pre></div>
+</details>
+<details>
+<summary>📄 <code>docker-compose.yml</code> as it is at <code>step-9</code></summary>
+<div class="code" data-lang="yaml"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c1"># Step 9: the whole twin as services, started with one command:</span>
+<span class="c1">#</span>
+<span class="c1">#   docker compose up --build</span>
+<span class="c1">#</span>
+<span class="c1"># Then open port 8080. Stop with Ctrl+C, or `docker compose down`.</span>
+
+<span class="nt">services</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># The sensor API (Python). No &quot;ports&quot;: it is NOT reachable from outside, only by the</span>
+<span class="w">  </span><span class="c1"># other services on the Compose network, by its name: http://api:8000</span>
+<span class="w">  </span><span class="nt">api</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">build</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">context</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">.</span>
+<span class="w">      </span><span class="nt">dockerfile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">api/Dockerfile</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">flood-twin-api:1.0</span>
+<span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">REPLAY_START</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${REPLAY_START:-2026-11-04T03:00}</span>
+<span class="w">      </span><span class="nt">REPLAY_SPEED</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${REPLAY_SPEED:-60}</span>
+<span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unless-stopped</span><span class="w"> </span><span class="c1"># crashed? Docker starts it again</span>
+
+<span class="w">  </span><span class="c1"># The web app: nginx serving the built SvelteKit app, and passing /api on to the API.</span>
+<span class="w">  </span><span class="nt">app</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">build</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./app</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">flood-twin-app:1.0</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8080:80&quot;</span><span class="w"> </span><span class="c1"># port 8080 on your machine → port 80 in the container</span>
+<span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">api</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">condition</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">service_healthy</span><span class="w"> </span><span class="c1"># wait until the API&#39;s health check passes</span>
+<span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unless-stopped</span>
+
+<span class="w">  </span><span class="c1"># Optional: a load test. Only starts with:  docker compose --profile loadtest up</span>
+<span class="w">  </span><span class="nt">loadtest</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">locustio/locust:2.47.0</span>
+<span class="w">    </span><span class="nt">profiles</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">loadtest</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./loadtest:/mnt/locust</span>
+<span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">-f /mnt/locust/locustfile.py --host http://app</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8089:8089&quot;</span><span class="w"> </span><span class="c1"># Locust&#39;s web page</span>
+<span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">app</span>
+</code></pre></div>
+</details>
+<details>
+<summary>📄 <code>app/src/lib/maplibre-worker.js</code> as it is at <code>step-9</code></summary>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c1">// Step 9: MapLibre does its heavy work (decoding tiles) in a web worker, loaded from a</span>
+<span class="c1">// separate file next to MapLibre&#39;s own code. The dev server serves that file straight from</span>
+<span class="c1">// node_modules, so in development it just works. The production build bundles MapLibre into</span>
+<span class="c1">// new files, and the worker file is left behind: the map stays empty.</span>
+<span class="c1">//</span>
+<span class="c1">// The fix: `?url` asks Vite to copy the worker file into the build and give us its address,</span>
+<span class="c1">// and setWorkerUrl() tells MapLibre where to find it. Import this file once, before making a map.</span>
+
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">setWorkerUrl</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;maplibre-gl&#39;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="nx">workerUrl</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;maplibre-gl/dist/maplibre-gl-worker.mjs?url&#39;</span><span class="p">;</span>
+
+<span class="nx">setWorkerUrl</span><span class="p">(</span><span class="nx">workerUrl</span><span class="p">);</span>
+</code></pre></div>
+</details>
+<details>
+<summary>📄 <code>app/vite.config.js</code> as it is at <code>step-9</code></summary>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">import</span><span class="w"> </span><span class="nx">adapter</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;@sveltejs/adapter-static&#39;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">sveltekit</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;@sveltejs/kit/vite&#39;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">defineConfig</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;vite&#39;</span><span class="p">;</span>
+
+<span class="k">export</span><span class="w"> </span><span class="k">default</span><span class="w"> </span><span class="nx">defineConfig</span><span class="p">({</span>
+<span class="w">	</span><span class="nx">plugins</span><span class="o">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">		</span><span class="nx">sveltekit</span><span class="p">({</span>
+<span class="w">			</span><span class="nx">compilerOptions</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">				</span><span class="c1">// Force runes mode for the project, except for libraries. Can be removed in svelte 6.</span>
+<span class="w">				</span><span class="nx">runes</span><span class="o">:</span><span class="w"> </span><span class="p">({</span><span class="w"> </span><span class="nx">filename</span><span class="w"> </span><span class="p">})</span><span class="w"> </span><span class="p">=&gt;</span>
+<span class="w">					</span><span class="nx">filename</span><span class="p">.</span><span class="nx">split</span><span class="p">(</span><span class="sr">/[/\\]/</span><span class="p">).</span><span class="nx">includes</span><span class="p">(</span><span class="s1">&#39;node_modules&#39;</span><span class="p">)</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="kc">undefined</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">			</span><span class="p">},</span>
+
+<span class="w">			</span><span class="c1">// Step 9: build the app into plain files (HTML, JS, CSS) in build/, for nginx to serve.</span>
+<span class="w">			</span><span class="c1">// Every page is rendered in the browser (ssr = false), so one fallback page is enough:</span>
+<span class="w">			</span><span class="c1">// nginx answers every address with index.html, and the app shows the right page.</span>
+<span class="w">			</span><span class="nx">adapter</span><span class="o">:</span><span class="w"> </span><span class="nx">adapter</span><span class="p">({</span><span class="w"> </span><span class="nx">fallback</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;index.html&#39;</span><span class="w"> </span><span class="p">})</span>
+<span class="w">		</span><span class="p">})</span>
+<span class="w">	</span><span class="p">],</span>
+
+<span class="w">	</span><span class="c1">// Step 2: MapLibre loads a web worker from a file next to its own code. Vite&#39;s dependency</span>
+<span class="w">	</span><span class="c1">// pre-bundling would move that code and break the worker, so leave MapLibre as it is.</span>
+<span class="w">	</span><span class="nx">optimizeDeps</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nx">exclude</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;maplibre-gl&#39;</span><span class="p">]</span>
+<span class="w">	</span><span class="p">},</span>
+
+<span class="w">	</span><span class="c1">// Step 1: the browser asks this dev server for /api/…, and the dev server passes the</span>
+<span class="w">	</span><span class="c1">// request on to the sensor API. The browser only ever talks to one address.</span>
+<span class="w">	</span><span class="nx">server</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nx">proxy</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="s1">&#39;/api&#39;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">				</span><span class="nx">target</span><span class="o">:</span><span class="w"> </span><span class="nx">process</span><span class="p">.</span><span class="nx">env</span><span class="p">.</span><span class="nx">API_URL</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="s1">&#39;http://localhost:8000&#39;</span><span class="p">,</span>
+<span class="w">				</span><span class="nx">rewrite</span><span class="o">:</span><span class="w"> </span><span class="p">(</span><span class="nx">path</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">path</span><span class="p">.</span><span class="nx">replace</span><span class="p">(</span><span class="sr">/^\/api/</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="p">)</span>
+<span class="w">			</span><span class="p">}</span>
+<span class="w">		</span><span class="p">}</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">});</span>
+</code></pre></div>
+</details>
+<p><strong>Why it was done this way, things to try, questions:</strong> <a href="https://github.com/AlpinistPanda/flood-twin-lab/blob/main/STEPS.md#step-9--the-whole-twin-in-containers--step-9">STEPS.md, step 9</a>. Lab 7B (<a href="https://github.com/AlpinistPanda/flood-twin-lab/blob/main/LAB-7B.md">LAB-7B.md</a>) does 9.7 and 9.8 with questions.</p>
+<h2 id="what-next">What next?</h2>
+<ul>
+<li><strong>Another map engine.</strong> The branches <code>extra/cesium</code> and <code>extra/deck</code> add a 3D page with CesiumJS or deck.gl on top of step 9. See how little they change: <code>git diff step-9 extra-deck --stat</code>.</li>
+<li><strong>Your own data.</strong> Replace the API with one for your city's sensors (see <a href="api.html#using-another-api">Using another API</a>), and the flood files with your own model's output (step 7, <em>Going further</em>).</li>
+<li><strong>Share it.</strong> Push your images to a registry (GitHub Container Registry, Docker Hub), so others can run your exact version with <code>docker compose up</code>, without building.</li>
+</ul>
+<hr />
+<h2 id="walkthrough-step-9-in-small-pieces-with-all-the-code">Walkthrough: step 9 in small pieces, with all the code</h2>
+<p>Stop the dev server. Keep the API running in terminal 1 until 9.H.</p>
+<h3 id="9a--a-production-build-and-a-surprise">9.A · A production build, and a surprise</h3>
+<p>In <code>app/</code>:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>npm<span class="w"> </span>uninstall<span class="w"> </span>@sveltejs/adapter-auto
+npm<span class="w"> </span>install<span class="w"> </span>-D<span class="w"> </span>@sveltejs/adapter-static@4.0.1
+</code></pre></div>
+<p>In <code>app/vite.config.js</code>, change the first line to:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">import</span><span class="w"> </span><span class="nx">adapter</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;@sveltejs/adapter-static&#39;</span><span class="p">;</span>
+</code></pre></div>
+<p>and the adapter line to:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">			</span><span class="c1">// Build the app into plain files (HTML, JS, CSS) in build/. Every page is rendered in the</span>
+<span class="w">			</span><span class="c1">// browser (ssr = false), so one fallback page is enough: the server answers every</span>
+<span class="w">			</span><span class="c1">// address with index.html, and the app shows the right page.</span>
+<span class="w">			</span><span class="nx">adapter</span><span class="o">:</span><span class="w"> </span><span class="nx">adapter</span><span class="p">({</span><span class="w"> </span><span class="nx">fallback</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;index.html&#39;</span><span class="w"> </span><span class="p">})</span>
+</code></pre></div>
+<p>Build it, and look at the result with Vite's preview server, which serves <code>build/</code> as a real server would (and uses the same <code>/api</code> proxy):</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>npm<span class="w"> </span>run<span class="w"> </span>build
+ls<span class="w"> </span>build
+npm<span class="w"> </span>run<span class="w"> </span>preview
+</code></pre></div>
+<p>Open port <strong>4173</strong>.</p>
+<p><strong>You see:</strong> the header, the banner and the status work, the Layers box is there... but the <strong>map is empty</strong>. The console (F12) shows an error about a <strong>worker</strong>. The dev server served MapLibre's worker file from <code>node_modules</code>; the build left it behind. Stop the preview (Ctrl+C).</p>
+<h3 id="9b--bring-the-worker-along">9.B · Bring the worker along</h3>
+<p>Create <strong><code>app/src/lib/maplibre-worker.js</code></strong>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c1">// MapLibre does its heavy work in a web worker, loaded from a separate file. The production</span>
+<span class="c1">// build bundles MapLibre into new files and leaves the worker file behind.</span>
+<span class="c1">// `?url` asks Vite to copy the worker file into the build and give us its address,</span>
+<span class="c1">// and setWorkerUrl() tells MapLibre where to find it.</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">setWorkerUrl</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;maplibre-gl&#39;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="nx">workerUrl</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;maplibre-gl/dist/maplibre-gl-worker.mjs?url&#39;</span><span class="p">;</span>
+
+<span class="nx">setWorkerUrl</span><span class="p">(</span><span class="nx">workerUrl</span><span class="p">);</span>
+</code></pre></div>
+<p>At the top of <code>MapLibreMap.svelte</code>, after the <code>maplibre-gl</code> import:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="s1">&#39;#lib/maplibre-worker.js&#39;</span><span class="p">;</span><span class="w"> </span><span class="c1">// so the map also works in the production build</span>
+</code></pre></div>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>npm<span class="w"> </span>run<span class="w"> </span>build
+npm<span class="w"> </span>run<span class="w"> </span>preview
+</code></pre></div>
+<p><strong>You see:</strong> on port 4173 the whole twin works, from the built files. <code>ls build/_app/immutable/assets</code> shows a file <code>maplibre-gl-worker.….mjs</code>. Stop the preview.</p>
+<h3 id="9c--nginx-serves-the-app-in-a-container">9.C · nginx serves the app, in a container</h3>
+<p>Create <strong><code>app/nginx.conf</code></strong> with only the essentials:</p>
+<div class="code" data-lang="nginx"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">server</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">80</span><span class="p">;</span>
+<span class="w">    </span><span class="kn">root</span><span class="w"> </span><span class="s">/usr/share/nginx/html</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1"># Every other address is a page of the app: answer with index.html, the app does the rest.</span>
+<span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">try_files</span><span class="w"> </span><span class="nv">$uri</span><span class="w"> </span><span class="nv">$uri/</span><span class="w"> </span><span class="s">/index.html</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Create <strong><code>app/Dockerfile</code></strong>:</p>
+<div class="code" data-lang="dockerfile"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c"># Stage 1: build the app with Node.js</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">node:26-slim</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="s">build</span>
+<span class="k">WORKDIR</span><span class="w"> </span><span class="s">/app</span>
+<span class="k">COPY</span><span class="w"> </span>package.json<span class="w"> </span>package-lock.json<span class="w"> </span>./
+<span class="k">RUN</span><span class="w"> </span>npm<span class="w"> </span>ci
+<span class="k">COPY</span><span class="w"> </span>.<span class="w"> </span>.
+<span class="k">RUN</span><span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>build
+
+<span class="c"># Stage 2: serve the built files with nginx. Only this stage ends up in the image.</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">nginx:1-alpine</span>
+<span class="k">COPY</span><span class="w"> </span>nginx.conf<span class="w"> </span>/etc/nginx/conf.d/default.conf
+<span class="k">COPY</span><span class="w"> </span>--from<span class="o">=</span>build<span class="w"> </span>/app/build<span class="w"> </span>/usr/share/nginx/html
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">80</span>
+</code></pre></div>
+<p>and <strong><code>app/.dockerignore</code></strong>:</p>
+<div class="code" data-lang=""><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>node_modules
+build
+.svelte-kit
+</code></pre></div>
+<p>Build the image and run it, in <code>app/</code>:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>flood-twin-app:test<span class="w"> </span>.
+docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-p<span class="w"> </span><span class="m">8080</span>:80<span class="w"> </span>flood-twin-app:test
+</code></pre></div>
+<p><strong>You see:</strong> port 8080: the header and the Layers box, but two problems. A <strong>red <em>Feed lost</em></strong>: of course, nginx doesn't know the API yet, and answers <code>/api/live</code> with <code>index.html</code>. And an <strong>empty map</strong> again, with a console error about the worker: nginx doesn't know the <code>.mjs</code> file type, and sends the worker as <code>application/octet-stream</code>. Browsers only run a worker that is sent as JavaScript. Stop it with Ctrl+C.</p>
+<p>Tell nginx about <code>.mjs</code>. In <code>app/nginx.conf</code>, inside <code>server { … }</code>, above <code>location /</code>:</p>
+<div class="code" data-lang="nginx"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">    </span><span class="c1"># MapLibre&#39;s web worker is a .mjs file. nginx doesn&#39;t know that extension and would send it</span>
+<span class="w">    </span><span class="c1"># as &quot;application/octet-stream&quot;; browsers refuse to run a worker that isn&#39;t JavaScript.</span>
+<span class="w">    </span><span class="k">location</span><span class="w"> </span><span class="p">~</span><span class="w"> </span><span class="sr">\.mjs$</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">types</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+<span class="w">        </span><span class="kn">default_type</span><span class="w"> </span><span class="s">application/javascript</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">try_files</span><span class="w"> </span><span class="nv">$uri</span><span class="w"> </span><span class="p">=</span><span class="mi">404</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>flood-twin-app:test<span class="w"> </span>.
+docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-p<span class="w"> </span><span class="m">8080</span>:80<span class="w"> </span>flood-twin-app:test
+</code></pre></div>
+<p><strong>You see:</strong> the map is back. Still <em>Feed lost</em>: that's 9.F. Stop with Ctrl+C.</p>
+<p>Run <code>docker build</code> a second time: almost every line says <code>CACHED</code>, and it's done in a second. Change a <code>.svelte</code> file and build again: <code>npm ci</code> is still <code>CACHED</code>, only the steps after <code>COPY . .</code> run again.</p>
+<h3 id="9d--the-api-in-a-container">9.D · The API in a container</h3>
+<p>Create <strong><code>api/Dockerfile</code></strong>:</p>
+<div class="code" data-lang="dockerfile"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c"># Built from the repository folder (see docker-compose.yml), because it needs both api/ and data/.</span>
+<span class="c"># The data goes INSIDE the image: whoever runs this image gets exactly the same 30 days.</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">python:3.15-slim</span>
+
+<span class="k">WORKDIR</span><span class="w"> </span><span class="s">/srv</span>
+
+<span class="c"># 1. Dependencies first, so Docker can cache them.</span>
+<span class="k">COPY</span><span class="w"> </span>api/requirements.txt<span class="w"> </span>api/
+<span class="k">RUN</span><span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>--no-cache-dir<span class="w"> </span>-r<span class="w"> </span>api/requirements.txt
+
+<span class="c"># 2. Then the data and the code.</span>
+<span class="k">COPY</span><span class="w"> </span>data/<span class="w"> </span>data/
+<span class="k">COPY</span><span class="w"> </span>api/<span class="w"> </span>api/
+
+<span class="c"># 3. Don&#39;t run as root.</span>
+<span class="k">RUN</span><span class="w"> </span>useradd<span class="w"> </span>--create-home<span class="w"> </span>twin
+<span class="k">USER</span><span class="w"> </span><span class="s">twin</span>
+
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">8000</span>
+
+<span class="c"># 4. How Docker knows the API is healthy (not just started): ask /health every 10 s.</span>
+<span class="k">HEALTHCHECK</span><span class="w"> </span>--interval<span class="o">=</span>10s<span class="w"> </span>--timeout<span class="o">=</span>3s<span class="w"> </span>--start-period<span class="o">=</span>10s<span class="w"> </span>--retries<span class="o">=</span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>CMD<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import urllib.request; urllib.request.urlopen(&#39;http://localhost:8000/health&#39;, timeout=2)&quot;</span>
+
+<span class="k">CMD</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;python&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;api/main.py&quot;</span><span class="p">]</span>
+</code></pre></div>
+<p>and, in the <strong>repository folder</strong>, <strong><code>.dockerignore</code></strong>:</p>
+<div class="code" data-lang=""><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>*
+!api/
+!data/
+</code></pre></div>
+<p>Stop the API in terminal 1 (port 8000 must be free), then in the repository folder:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>docker<span class="w"> </span>build<span class="w"> </span>-f<span class="w"> </span>api/Dockerfile<span class="w"> </span>-t<span class="w"> </span>flood-twin-api:test<span class="w"> </span>.
+docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-p<span class="w"> </span><span class="m">8000</span>:8000<span class="w"> </span>flood-twin-api:test
+</code></pre></div>
+<p><strong>You see:</strong> port 8000 with <code>/docs</code>: the API, now from a container. After about 10 s, <code>docker ps</code> (in another terminal) says <code>(healthy)</code>. Stop it with Ctrl+C.</p>
+<h3 id="9e--both-together-docker-compose">9.E · Both together: Docker Compose</h3>
+<p>Create <strong><code>docker-compose.yml</code></strong> in the repository folder:</p>
+<div class="code" data-lang="yaml"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="c1"># The whole twin as services, started with one command:  docker compose up --build</span>
+
+<span class="nt">services</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># The sensor API. No &quot;ports&quot;: only the other services can reach it, by its name: http://api:8000</span>
+<span class="w">  </span><span class="nt">api</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">build</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">context</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">.</span>
+<span class="w">      </span><span class="nt">dockerfile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">api/Dockerfile</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">flood-twin-api:1.0</span>
+<span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">REPLAY_START</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${REPLAY_START:-2026-11-04T03:00}</span>
+<span class="w">      </span><span class="nt">REPLAY_SPEED</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${REPLAY_SPEED:-60}</span>
+<span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unless-stopped</span><span class="w"> </span><span class="c1"># crashed? Docker starts it again</span>
+
+<span class="w">  </span><span class="c1"># The web app: nginx serving the built app, and passing /api on to the API.</span>
+<span class="w">  </span><span class="nt">app</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">build</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./app</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">flood-twin-app:1.0</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8080:80&quot;</span><span class="w"> </span><span class="c1"># port 8080 on your machine → port 80 in the container</span>
+<span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">api</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">condition</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">service_healthy</span><span class="w"> </span><span class="c1"># wait until the API&#39;s health check passes</span>
+<span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unless-stopped</span>
+</code></pre></div>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>--build
+</code></pre></div>
+<p><strong>You see:</strong> both services start; <code>app</code> waits until <code>api</code> is healthy. Port 8080: still <em>Feed lost</em>. Both containers run, but nginx doesn't pass <code>/api</code> on yet. Stop with Ctrl+C.</p>
+<h3 id="9f--nginx-passes-api-on-the-simple-way-and-its-weak-spot">9.F · nginx passes <code>/api</code> on: the simple way, and its weak spot</h3>
+<p>Add to <code>app/nginx.conf</code>, inside <code>server { … }</code>:</p>
+<div class="code" data-lang="nginx"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">    </span><span class="k">location</span><span class="w"> </span><span class="s">/api/</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">rewrite</span><span class="w"> </span><span class="s">^/api/(.*)</span>$<span class="w"> </span><span class="s">/</span><span class="nv">$1</span><span class="w"> </span><span class="s">break</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://api:8000</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>--build<span class="w"> </span>-d
+</code></pre></div>
+<p>(<code>-d</code>: in the background. <code>docker compose logs -f</code> shows the logs, <code>docker compose ps</code> the services.)</p>
+<p><strong>You see:</strong> port 8080: <em>Live</em>! The whole twin works from containers.</p>
+<p>Now an ordinary day at work: the API is stopped for maintenance, and meanwhile the web server restarts (an update, a reboot):</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>api
+docker<span class="w"> </span>compose<span class="w"> </span>restart<span class="w"> </span>app
+docker<span class="w"> </span>compose<span class="w"> </span>ps
+docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>app<span class="w"> </span><span class="p">|</span><span class="w"> </span>tail<span class="w"> </span>-3
+</code></pre></div>
+<p><strong>You see:</strong> <code>app</code> keeps <em>Restarting</em>, and its log says <code>host not found in upstream &quot;api&quot;</code>. nginx looks up the name <code>api</code> <strong>once, when it starts</strong>, and refuses to start when it can't. Reload port 8080: <strong>nothing at all</strong>, not even a <em>Feed lost</em> page. A problem in the API has taken the whole twin offline. Start the API again (<code>docker compose start api</code>), and nginx recovers.</p>
+<h3 id="9g--nginx-passes-api-on-the-robust-way">9.G · nginx passes <code>/api</code> on: the robust way</h3>
+<p>Replace the <code>location /api/</code> block with:</p>
+<div class="code" data-lang="nginx"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">    </span><span class="c1"># Find the API by its name on the Compose network, and look the name up again every 10 s.</span>
+<span class="w">    </span><span class="c1"># Without this, nginx looks it up once at start: it refuses to start while the API is down,</span>
+<span class="w">    </span><span class="c1"># and would keep using an old address if the API container got a new one.</span>
+<span class="w">    </span><span class="k">resolver</span><span class="w"> </span><span class="mi">127</span><span class="s">.0.0.11</span><span class="w"> </span><span class="s">valid=10s</span><span class="p">;</span>
+<span class="w">    </span><span class="k">set</span><span class="w"> </span><span class="nv">$api</span><span class="w"> </span><span class="s">http://api:8000</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1"># /api/live → http://api:8000/live (the same as the proxy in vite.config.js)</span>
+<span class="w">    </span><span class="k">location</span><span class="w"> </span><span class="s">/api/</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">rewrite</span><span class="w"> </span><span class="s">^/api/(.*)</span>$<span class="w"> </span><span class="s">/</span><span class="nv">$1</span><span class="w"> </span><span class="s">break</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="nv">$api</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_read_timeout</span><span class="w"> </span><span class="s">10s</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+<p><code>127.0.0.11</code> is Docker's own name server. With the address in a variable, nginx looks it up when a request comes in, and again every 10 seconds, instead of once at start.</p>
+<p>Rebuild, then repeat the same test:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>--build<span class="w"> </span>-d
+docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>api
+docker<span class="w"> </span>compose<span class="w"> </span>restart<span class="w"> </span>app
+docker<span class="w"> </span>compose<span class="w"> </span>ps
+</code></pre></div>
+<p><strong>You see:</strong> <code>app</code> is <em>Up</em>. Port 8080 shows the twin with <em>Feed lost</em> and <em>Flood warnings unknown</em>: the page tells the truth instead of disappearing. <code>docker compose start api</code>: <em>Live</em> again within 10 s, without touching nginx.</p>
+<h3 id="9h--caching-and-compression">9.H · Caching and compression</h3>
+<p>The flood layers. Browsers must <strong>ask</strong> whether a layer has changed (<code>no-cache</code>), and keep <strong>no</strong> copy of the COGs (<code>no-store</code>), or a rebuilt container can leave the flood layer empty:</p>
+<div class="code" data-lang="nginx"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">    </span><span class="k">location</span><span class="w"> </span><span class="s">/layers/</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">types</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kn">image/tiff</span><span class="w"> </span><span class="s">tif</span><span class="p">;</span>
+<span class="w">            </span><span class="kn">application/geo+json</span><span class="w"> </span><span class="s">geojson</span><span class="p">;</span>
+<span class="w">            </span><span class="kn">application/json</span><span class="w"> </span><span class="s">json</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="kn">add_header</span><span class="w"> </span><span class="s">Cache-Control</span><span class="w"> </span><span class="s">&quot;no-cache&quot;</span><span class="p">;</span>
+
+<span class="w">        </span><span class="kn">location</span><span class="w"> </span><span class="p">~</span><span class="w"> </span><span class="sr">\.tif$</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kn">add_header</span><span class="w"> </span><span class="s">Cache-Control</span><span class="w"> </span><span class="s">&quot;no-store&quot;</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1"># Compress text on the way out (not the .tif: it is already compressed).</span>
+<span class="w">    </span><span class="k">gzip</span><span class="w"> </span><span class="no">on</span><span class="p">;</span>
+<span class="w">    </span><span class="k">gzip_types</span><span class="w"> </span><span class="s">application/json</span><span class="w"> </span><span class="s">application/geo+json</span><span class="w"> </span><span class="s">application/javascript</span><span class="w"> </span><span class="s">text/css</span><span class="p">;</span>
+</code></pre></div>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>--build<span class="w"> </span>-d
+curl<span class="w"> </span>-I<span class="w"> </span>http://localhost:8080/layers/depth_timeseries_100yr.json
+curl<span class="w"> </span>-I<span class="w"> </span>http://localhost:8080/layers/depth_timeseries_100yr.tif
+</code></pre></div>
+<p><strong>You see:</strong> <code>Cache-Control: no-cache</code> for the JSON, <code>no-store</code> for the <code>.tif</code>. In the browser: both flood layers and the time bar work.</p>
+<p><code>docker compose down</code> stops everything.</p>
+<h3 id="9i--break-it">9.I · Break it</h3>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>api<span class="w">       </span><span class="c1"># an operator stops the API</span>
+docker<span class="w"> </span>compose<span class="w"> </span>start<span class="w"> </span>api<span class="w">      </span><span class="c1"># and starts it again</span>
+docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>api<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import os, signal; os.kill(1, signal.SIGTERM)&quot;</span><span class="w">   </span><span class="c1"># a crash</span>
+docker<span class="w"> </span>compose<span class="w"> </span>ps<span class="w">             </span><span class="c1"># the API comes back by itself</span>
+</code></pre></div>
+<p><strong>You see:</strong> <em>Feed lost</em> after the stop, <em>Live</em> within 10 s after the start; after the crash, the API restarts by itself (<code>restart: unless-stopped</code>) and is <em>healthy</em> again after a few seconds.</p>
+<h3 id="9j--the-load-test">9.J · The load test</h3>
+<p>Add a third service to <code>docker-compose.yml</code>, under <code>services:</code>:</p>
+<div class="code" data-lang="yaml"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">  </span><span class="c1"># Optional: a load test. Only starts with:  docker compose --profile loadtest up</span>
+<span class="w">  </span><span class="nt">loadtest</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">locustio/locust:2.47.0</span>
+<span class="w">    </span><span class="nt">profiles</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">loadtest</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./loadtest:/mnt/locust</span>
+<span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">-f /mnt/locust/locustfile.py --host http://app</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8089:8089&quot;</span><span class="w"> </span><span class="c1"># Locust&#39;s web page</span>
+<span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">app</span>
+</code></pre></div>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>loadtest<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>loadtest
+</code></pre></div>
+<p><strong>You see:</strong> port 8089, Locust. 1,000 users, spawn rate 100, <strong>Start</strong>. After a minute, the <strong>Statistics</strong> tab: which request is slowest? Stop with <code>docker compose stop loadtest</code>, and everything with <code>docker compose down</code>.</p>
+<p>That's the reference of this step, and the whole twin. Commit.</p>
+
+    </article>
+    <nav class="next" aria-label="Previous and next"><a class="prev" href="08-flood-time.html"><span>Previous</span>8 · The flood over time</a><a class="nxt" href="api.html"><span>Next</span>The sensor API</a></nav>
+  </main>
+  <nav class="toc" aria-label="On this page"><p>On this page</p><ol><li><a href="#development-vs-production">Development vs production</a></li><li><a href="#91--build-the-app-into-plain-files">9.1 · Build the app into plain files</a></li><li><a href="#92--the-maplibre-worker-in-the-build">9.2 · The MapLibre worker in the build</a></li><li><a href="#93--nginx-what-the-dev-server-did">9.3 · nginx: what the dev server did</a></li><li><a href="#94--the-app-image-appdockerfile">9.4 · The app image: app/Dockerfile</a></li><li><a href="#95--the-api-image-apidockerfile">9.5 · The API image: api/Dockerfile</a></li><li><a href="#96--the-whole-twin-docker-composeyml">9.6 · The whole twin: docker-compose.yml</a></li><li><a href="#97--run-it">9.7 · Run it</a></li><li><a href="#98--break-it-then-load-it">9.8 · Break it, then load it</a></li><li><a href="#check">Check</a></li><li><a href="#stuck">Stuck?</a></li><li><a href="#what-next">What next?</a></li><li><a href="#walkthrough-step-9-in-small-pieces-with-all-the-code">Walkthrough: step 9 in small pieces, with all the code</a></li></ol></nav>
+</div>
+<script src="assets/guide.js"></script>
+</body>
+</html>

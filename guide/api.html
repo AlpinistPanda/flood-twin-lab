@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The sensor API · Flood twin build guide</title>
+<link rel="stylesheet" href="assets/guide.css">
+<script>try{const t=localStorage.getItem('guide-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header class="top">
+  <button class="menu" type="button" aria-label="Show steps" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">Flood twin <span>build guide</span></a>
+  <a class="repo" href="https://github.com/AlpinistPanda/flood-twin-lab">GitHub</a>
+  <button class="theme" type="button" aria-label="Switch light or dark">◐</button>
+</header>
+<div class="layout">
+  <aside class="side"><nav aria-label="Steps"><ol><li><a href="index.html">Overview</a></li><li><a href="00-sveltekit.html">0 · An empty SvelteKit app</a></li><li><a href="01-feed-table.html">1 · The live feed as a table</a></li><li><a href="02-maplibre.html">2 · Sensors on a map</a></li><li><a href="03-thresholds.html">3 · Thresholds and alerts</a></li><li><a href="04-live.html">4 · Live updates</a></li><li><a href="05-pages-layers.html">5 · Pages and layers</a></li><li><a href="06-charts.html">6 · Charts in the popup</a></li><li><a href="07-flood-layers.html">7 · Flood raster and vector</a></li><li><a href="08-flood-time.html">8 · The flood over time</a></li><li><a href="09-containers.html">9 · Containers</a></li><li><a href="api.html" aria-current="page">The sensor API</a></li></ol></nav></aside>
+  <main>
+    <article>
+<h1 id="the-sensor-api">The sensor API</h1>
+<p class="pager"><a href="index.html">← Guide overview</a></p>
+<p>The web app you build doesn't read sensor files. It asks a <strong>web service</strong> (an API) for the water levels, the way a real twin asks a city's sensor platform. This page describes that service: what it offers, and how your app connects to it.</p>
+<p>You don't build the API in this guide. In a real project it belongs to someone else, such as the city, a sensor company or another team, and you get a description like this one. The repository has a working version in <code>api/main.py</code> that <strong>replays</strong> 30 days of real readings from 33 sensors in Tambaram as if they were live.</p>
+<h2 id="start-it">Start it</h2>
+<p>In terminal 1, in the repository folder:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>python<span class="w"> </span>api/main.py
+</code></pre></div>
+<p>It listens on port <strong>8000</strong>. Open that port and add <strong><code>/docs</code></strong> to the address: FastAPI shows every endpoint, and you can try each one with <strong>Try it out</strong>. Keep the API running while you work on the app.</p>
+<h3 id="settings">Settings</h3>
+<p>You set these as environment variables in front of the command, for example <code>REPLAY_START=2026-11-04T15:00 python api/main.py</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>REPLAY_START</code></td>
+<td><code>2026-11-04T03:00</code></td>
+<td>Where in the data the replay begins (UTC). <code>2026-11-04T15:00</code> starts in the middle of the 4 November rain event</td>
+</tr>
+<tr>
+<td><code>REPLAY_SPEED</code></td>
+<td><code>60</code></td>
+<td>Seconds of data per real second. 60 means one hour of data per real minute</td>
+</tr>
+<tr>
+<td><code>PORT</code></td>
+<td><code>8000</code></td>
+<td>The port to listen on</td>
+</tr>
+</tbody>
+</table>
+<p>At the end of the data, the replay starts again at <code>REPLAY_START</code>. When you restart the API, the replay starts again too.</p>
+<h2 id="the-rules">The rules</h2>
+<ul>
+<li>Every answer is <strong>JSON</strong>. Only <code>GET</code> requests.</li>
+<li><strong>Times</strong> are Unix time in <strong>seconds, UTC</strong> (not milliseconds, as JavaScript's <code>Date.now()</code> uses). Convert to Indian time (IST, UTC+5:30) only when you show a time.</li>
+<li><strong>Depths</strong> are metres of water above the street at the sensor. The data is real and <strong>unfiltered</strong>: negative depths, spikes, gaps and dead sensors are all in there. Read <a href="https://github.com/AlpinistPanda/flood-twin-lab/blob/main/data/README.md"><code>data/README.md</code></a>.</li>
+<li>Errors come back with a status code and a message: <code>404 {&quot;detail&quot;: &quot;Unknown site XX&quot;}</code>, or <code>400</code> for a time window that is too long.</li>
+</ul>
+<h2 id="endpoints">Endpoints</h2>
+<h3 id="get-sites-where-the-sensors-are"><code>GET /sites</code>: where the sensors are</h3>
+<p>Ask once, when the app starts: sites don't change.</p>
+<div class="code" data-lang="json"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;area&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Tambaram, Chennai&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;time_unit&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;unix seconds, UTC&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;depth_unit&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;m&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;sites&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;TBM-01&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;street&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;lat&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">12.9861</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;lon&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">80.1242</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;sensor_height_m&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">2.5</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;installed&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-09-24&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;readings&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7039</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;first&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1791907555</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;last&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1793182596</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td><code>TBM-01</code> … <code>TBM-33</code></td>
+</tr>
+<tr>
+<td><code>type</code></td>
+<td><code>street</code>, <code>underpass</code> or <code>drain</code></td>
+</tr>
+<tr>
+<td><code>lat</code>, <code>lon</code></td>
+<td>Location (WGS 84)</td>
+</tr>
+<tr>
+<td><code>sensor_height_m</code></td>
+<td>How high the sensor hangs above the street. A depth above this is impossible</td>
+</tr>
+<tr>
+<td><code>readings</code>, <code>first</code>, <code>last</code></td>
+<td>How many readings the site has, and the time of the first and last one</td>
+</tr>
+</tbody>
+</table>
+<h3 id="get-live-the-latest-reading-of-every-sensor-now"><code>GET /live</code>: the latest reading of every sensor, now</h3>
+<p>Ask this again and again (step 4 asks every 10 seconds).</p>
+<div class="code" data-lang="json"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;time&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1794465586</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;readings&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;site&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;TBM-01&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;time&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1793182596</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;depth_m&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">-7.49</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;age_s&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1282990</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;site&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;TBM-02&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;time&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1794465329</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;depth_m&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.01</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;age_s&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">257</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;site&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;TBM-17&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;time&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;depth_m&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;age_s&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>time</code></td>
+<td>The replay's &quot;now&quot;</td>
+</tr>
+<tr>
+<td><code>readings[].time</code></td>
+<td>When this sensor last reported</td>
+</tr>
+<tr>
+<td><code>readings[].depth_m</code></td>
+<td>What it reported</td>
+</tr>
+<tr>
+<td><code>readings[].age_s</code></td>
+<td>How old that reading is, in seconds. A sensor that stopped reporting keeps its last reading, getting older and older: deciding when that is too old is up to your app</td>
+</tr>
+</tbody>
+</table>
+<p>A sensor that has never reported has <code>null</code> everywhere.</p>
+<h3 id="get-historysite-every-reading-of-one-sensor-in-a-time-window"><code>GET /history/{site}</code>: every reading of one sensor in a time window</h3>
+<div class="code" data-lang=""><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>/history/TBM-15                              the last 24 hours
+/history/TBM-15?from=1794379191&amp;to=1794465591
+</code></pre></div>
+<p>At most <strong>7 days</strong> per request. <code>from</code> defaults to 24 hours before <code>to</code>; <code>to</code> defaults to now.</p>
+<div class="code" data-lang="json"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;site&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;TBM-15&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;from&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1794379191</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;to&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1794465591</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;readings&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;time&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1794379423</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;depth_m&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.07</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;time&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1794379723</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;depth_m&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.06</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="get-historysitehourly-one-summary-per-hour"><code>GET /history/{site}/hourly</code>: one summary per hour</h3>
+<p>For long periods: a month of one-minute readings is about 43,000 points, far too many for a chart. This endpoint sends one row per hour.</p>
+<div class="code" data-lang=""><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>/history/TBM-15/hourly                       the last 30 days
+</code></pre></div>
+<p>At most <strong>31 days</strong> per request. Hours without readings are left out, so gaps stay visible.</p>
+<div class="code" data-lang="json"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;site&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;TBM-15&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;from&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1791873587</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;to&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1794465587</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;hours&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;time&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1791907200</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;min&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.01</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;mean&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.018</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;max&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.03</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;n&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">55</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;time&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1791910800</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;min&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.02</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;mean&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.025</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;max&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.03</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;n&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">60</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><code>time</code> is the start of the hour, <code>n</code> the number of readings in it.</p>
+<h3 id="get-health-is-the-service-up"><code>GET /health</code>: is the service up?</h3>
+<div class="code" data-lang="json"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ok&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;replay&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;start&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1793761200</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;speed&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">60.0</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;now&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1794465589</span><span class="w"> </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;from&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1791907513</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;to&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1794499497</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;sites&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">33</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Docker uses this in step 9 to know when the API is ready.</p>
+<h2 id="how-your-app-connects-to-it">How your app connects to it</h2>
+<p>The browser shows your app from one address (port 5173) and the API lives at another (port 8000). In a Codespace, both get their own long web address, and you don't want to write those into your code.</p>
+<p>So the browser <strong>never talks to the API directly</strong>. It asks your app's own address for <code>/api/live</code>, and the <strong>dev server passes the request on</strong> to the API, without the <code>/api</code>:</p>
+<div class="code" data-lang=""><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>browser  ──  GET /api/live  ──▶  dev server (5173)  ──  GET /live  ──▶  sensor API (8000)
+</code></pre></div>
+<p>You set that up in step 1 (a <code>proxy</code> in <code>app/vite.config.js</code>). In production (step 9), <strong>nginx</strong> does the same job. Your code only ever uses relative addresses like <code>fetch('/api/live')</code>, and works the same in both.</p>
+<h3 id="using-another-api">Using another API</h3>
+<p>To use another API with the same endpoints, for example one running on another machine, start the dev server with its address:</p>
+<div class="code" data-lang="bash"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="nv">API_URL</span><span class="o">=</span>http://192.168.1.20:8000<span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>dev
+</code></pre></div>
+<p>If your API has <strong>different</strong> endpoints or field names (say, <code>level_cm</code> instead of <code>depth_m</code>), don't spread that over your app. Convert its answers in <strong>one place</strong>, right where you fetch them, into the shapes above. The rest of the app stays the same. In this app, that place is <code>poll()</code> (step 4, then <code>feed.svelte.js</code> from step 5 on).</p>
+<h2 id="want-to-see-inside">Want to see inside?</h2>
+<p><code>api/main.py</code> is about 170 lines of Python. The interesting part is <code>data_now()</code>: how a recording becomes &quot;live&quot;. Not needed for the guide, but worth a look if you want to build such a replay for your own data.</p>
+
+    </article>
+    <nav class="next" aria-label="Previous and next"><a class="prev" href="09-containers.html"><span>Previous</span>9 · Containers</a><span></span></nav>
+  </main>
+  <nav class="toc" aria-label="On this page"><p>On this page</p><ol><li><a href="#start-it">Start it</a></li><li><a href="#the-rules">The rules</a></li><li><a href="#endpoints">Endpoints</a></li><li><a href="#how-your-app-connects-to-it">How your app connects to it</a></li><li><a href="#want-to-see-inside">Want to see inside?</a></li></ol></nav>
+</div>
+<script src="assets/guide.js"></script>
+</body>
+</html>

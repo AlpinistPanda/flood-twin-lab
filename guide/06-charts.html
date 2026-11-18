@@ -1,0 +1,820 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 6 · A day and a month in the popup · Flood twin build guide</title>
+<link rel="stylesheet" href="assets/guide.css">
+<script>try{const t=localStorage.getItem('guide-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header class="top">
+  <button class="menu" type="button" aria-label="Show steps" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">Flood twin <span>build guide</span></a>
+  <a class="repo" href="https://github.com/AlpinistPanda/flood-twin-lab">GitHub</a>
+  <button class="theme" type="button" aria-label="Switch light or dark">◐</button>
+</header>
+<div class="layout">
+  <aside class="side"><nav aria-label="Steps"><ol><li><a href="index.html">Overview</a></li><li><a href="00-sveltekit.html">0 · An empty SvelteKit app</a></li><li><a href="01-feed-table.html">1 · The live feed as a table</a></li><li><a href="02-maplibre.html">2 · Sensors on a map</a></li><li><a href="03-thresholds.html">3 · Thresholds and alerts</a></li><li><a href="04-live.html">4 · Live updates</a></li><li><a href="05-pages-layers.html">5 · Pages and layers</a></li><li><a href="06-charts.html" aria-current="page">6 · Charts in the popup</a></li><li><a href="07-flood-layers.html">7 · Flood raster and vector</a></li><li><a href="08-flood-time.html">8 · The flood over time</a></li><li><a href="09-containers.html">9 · Containers</a></li><li><a href="api.html">The sensor API</a></li></ol></nav></aside>
+  <main>
+    <article>
+<h1 id="step-6--a-day-and-a-month-in-the-popup">Step 6 · A day and a month in the popup</h1>
+<p class="pager"><a href="05-pages-layers.html">← Step 5</a> · <a href="index.html">Guide overview</a> · <a href="07-flood-layers.html">Step 7 →</a></p>
+<p><strong>You build:</strong> a sensor popup with three tabs: <strong>Now</strong> (live), <strong>Day</strong> (every reading of the last 24 hours) and <strong>Month</strong> (one summary per hour for 30 days), with the thresholds as dashed lines.
+<strong>You learn:</strong> drawing a chart in SVG without a library; loading data only when it's needed; putting a Svelte component inside a MapLibre popup.
+<strong>Time:</strong> about 75 minutes.
+<strong>Start from:</strong> your step 5, or the tag <code>step-5</code>.</p>
+<hr />
+<h2 id="the-data">The data</h2>
+<p>You need two endpoints of <a href="api.html">the sensor API</a>:</p>
+<table>
+<thead>
+<tr>
+<th>Tab</th>
+<th>Endpoint</th>
+<th>Points</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Day</td>
+<td><code>/api/history/TBM-15</code> (the last 24 hours)</td>
+<td>every reading: ~1,400 for a sensor that reports every minute</td>
+</tr>
+<tr>
+<td>Month</td>
+<td><code>/api/history/TBM-15/hourly</code> (the last 30 days)</td>
+<td>one row per hour with <code>min</code>, <code>mean</code> and <code>max</code>: ~720</td>
+</tr>
+</tbody>
+</table>
+<p>Why not a month of every reading? That's about 43,000 points per sensor. A chart 300 pixels wide can't show them, and a field engineer's phone shouldn't have to download them. The <strong>server</strong> summarises; the browser draws.</p>
+<p>Try both in the browser first: port 5173, <code>/api/history/TBM-15/hourly</code>.</p>
+<h2 id="61--a-chart-is-just-numbers-turned-into-positions">6.1 · A chart is just numbers turned into positions</h2>
+<p>Create <strong><code>app/src/lib/SensorChart.svelte</code></strong>. It receives a list of points and draws them in an <code>&lt;svg&gt;</code>. An SVG has its own coordinate system, set by <code>viewBox</code>; the browser scales it to fit the popup.</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">points</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$props</span><span class="p">();</span><span class="w"> </span><span class="c1">// [{ t: unix seconds, v: metres }]</span>
+
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">W</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">320</span><span class="p">,</span><span class="w"> </span><span class="nx">H</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">150</span><span class="p">;</span><span class="w">            </span><span class="c1">// the drawing size</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">L</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">36</span><span class="p">,</span><span class="w"> </span><span class="nx">R</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">8</span><span class="p">,</span><span class="w"> </span><span class="nx">T</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">8</span><span class="p">,</span><span class="w"> </span><span class="nx">B</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">22</span><span class="p">;</span><span class="w"> </span><span class="c1">// room for the axis labels</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">t0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">points</span><span class="p">[</span><span class="mf">0</span><span class="p">]</span><span class="o">?</span><span class="p">.</span><span class="nx">t</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="mf">0</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">t1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">points</span><span class="p">.</span><span class="nx">at</span><span class="p">(</span><span class="o">-</span><span class="mf">1</span><span class="p">)</span><span class="o">?</span><span class="p">.</span><span class="nx">t</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="mf">1</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">yMax</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nb">Math</span><span class="p">.</span><span class="nx">max</span><span class="p">(</span><span class="mf">0.6</span><span class="p">,</span><span class="w"> </span><span class="p">...</span><span class="nx">points</span><span class="p">.</span><span class="nx">map</span><span class="p">((</span><span class="nx">p</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">p</span><span class="p">.</span><span class="nx">v</span><span class="p">)));</span><span class="w"> </span><span class="c1">// always show the 0.5 m line</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">yMin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nb">Math</span><span class="p">.</span><span class="nx">min</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="p">...</span><span class="nx">points</span><span class="p">.</span><span class="nx">map</span><span class="p">((</span><span class="nx">p</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">p</span><span class="p">.</span><span class="nx">v</span><span class="p">)));</span>
+
+<span class="w">	</span><span class="c1">// time → x, depth → y. In SVG, y grows DOWNWARDS, so the highest depth gets the smallest y.</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">t</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">L</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="p">((</span><span class="nx">t</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">t0</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="p">(</span><span class="nx">t1</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">t0</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="mf">1</span><span class="p">))</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="nx">W</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">L</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">R</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">v</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">T</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="p">((</span><span class="nx">yMax</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">v</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="p">(</span><span class="nx">yMax</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">yMin</span><span class="p">))</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="nx">H</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">T</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">B</span><span class="p">);</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">svg</span> <span class="na">viewBox</span><span class="o">=</span><span class="s">&quot;0 0 {W} {H}&quot;</span><span class="p">&gt;</span>
+	…
+<span class="p">&lt;/</span><span class="nt">svg</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">style</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="nt">svg</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="mi">100</span><span class="kt">%</span><span class="p">;</span><span class="w"> </span><span class="k">height</span><span class="p">:</span><span class="w"> </span><span class="kc">auto</span><span class="p">;</span><span class="w"> </span><span class="k">display</span><span class="p">:</span><span class="w"> </span><span class="kc">block</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">style</span><span class="p">&gt;</span>
+</code></pre></div>
+<p><strong>a · The line.</strong> An SVG <code>&lt;path&gt;</code> is drawn from a string of commands: <code>M x,y</code> moves the pen, <code>L x,y</code> draws a line to a point. Build that string from the points with <code>$derived</code>, and draw it:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">path</span> <span class="na">d</span><span class="o">=</span><span class="s">{line}</span> <span class="na">fill</span><span class="o">=</span><span class="s">&quot;none&quot;</span> <span class="na">stroke</span><span class="o">=</span><span class="s">&quot;#17324a&quot;</span> <span class="p">/&gt;</span>
+</code></pre></div>
+<p><strong>b · Gaps stay gaps.</strong> Sensors stop reporting sometimes. A line straight across a 6-hour gap pretends we know what happened. Give the chart a prop <code>gap_s</code>: when the time to the previous point is more than <code>gap_s</code>, start a new piece with <code>M</code> instead of <code>L</code>.</p>
+<p><strong>c · Axes.</strong> Horizontal grid lines with their value in metres on the left (a few round values between <code>yMin</code> and <code>yMax</code>), and four time labels along the bottom. Let the page decide how a time is written, with a prop <code>label</code>: a function from Unix seconds to text (<em>14:00</em> for a day, <em>04 Nov</em> for a month).</p>
+<p><strong>d · The thresholds.</strong> For each entry in <code>THRESHOLDS</code> (step 3), a dashed horizontal line in its level's colour: <code>stroke-dasharray=&quot;4 3&quot;</code>.</p>
+<p><strong>e · The Month view's ranges.</strong> The hourly <em>mean</em> of a sensor that jumps between 0.5 m and −0.3 m looks calm. So points can also have <code>lo</code> and <code>hi</code>: for those, draw a thin vertical bar from <code>y(lo)</code> to <code>y(hi)</code> behind the line. Include <code>lo</code> and <code>hi</code> when you compute <code>yMin</code> and <code>yMax</code>.</p>
+<p><strong>f · Broken readings.</strong> Some sensors report −7 m. One such reading squashes the whole chart into a flat line at the top. Never let <code>yMin</code> go below −0.5 m, and clip what falls outside the plot area with a <code>&lt;clipPath&gt;</code>. Say so under the chart: <em>Some readings are below −0.5 m and fall off the chart.</em></p>
+<p><code>$props.id()</code> gives a unique id per chart, which you need for the clip path's id when two charts are on the screen.</p>
+<h2 id="62--the-popup-content-appsrclibsensordetailsvelte">6.2 · The popup content: <code>app/src/lib/SensorDetail.svelte</code></h2>
+<p>A component that shows everything about one sensor. It receives only an <code>id</code>, and gets the rest itself:</p>
+<ul>
+<li>
+<p><strong>&quot;Now&quot;</strong> from the shared feed, so it keeps updating while the popup is open: <code>feed.sites.find(…)</code>, <code>feed.readingFor(id)</code>, <code>feed.levels[id]</code> (all <code>$derived</code>). Show the depth large, the time, the age, and how high the sensor hangs.</p>
+</li>
+<li>
+<p><strong>&quot;Day&quot; and &quot;Month&quot;</strong> from the API, <strong>only when their tab is opened for the first time</strong>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="kd">let</span><span class="w"> </span><span class="nx">tab</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="s1">&#39;now&#39;</span><span class="p">);</span>
+<span class="kd">let</span><span class="w"> </span><span class="nx">day</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span><span class="w"> </span><span class="c1">// [{ t, v }]</span>
+
+<span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">show</span><span class="p">(</span><span class="nx">which</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="nx">tab</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">which</span><span class="p">;</span>
+<span class="w">	</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">which</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;day&#39;</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">!</span><span class="nx">day</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="sb">`/api/history/</span><span class="si">${</span><span class="nx">id</span><span class="si">}</span><span class="sb">`</span><span class="p">);</span>
+<span class="w">		</span><span class="nx">day</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="k">await</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">json</span><span class="p">()).</span><span class="nx">readings</span><span class="p">.</span><span class="nx">map</span><span class="p">((</span><span class="nx">p</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">({</span><span class="w"> </span><span class="nx">t</span><span class="o">:</span><span class="w"> </span><span class="nx">p</span><span class="p">.</span><span class="nx">time</span><span class="p">,</span><span class="w"> </span><span class="nx">v</span><span class="o">:</span><span class="w"> </span><span class="nx">p</span><span class="p">.</span><span class="nx">depth_m</span><span class="w"> </span><span class="p">}));</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="c1">// … the same for &#39;month&#39;, from /hourly: { t: h.time, v: h.mean, lo: h.min, hi: h.max }</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Handle errors like in step 1 (<code>r.ok</code>, <code>try</code>/<code>catch</code>), and show <em>Loading …</em> while the data is on its way.</p>
+</li>
+<li>
+<p><strong>Three tab buttons</strong> at the top, and the sensor's id, type and level (with its coloured dot) above them.</p>
+</li>
+<li>
+<p>Under each chart, one line saying what it shows: <em>Every reading of the last 24 hours (m)</em>, <em>Hourly mean (line) and range (bars), last 30 days (m)</em>.</p>
+</li>
+</ul>
+<p>Day: <code>&lt;SensorChart points={day} gap_s={30 * 60} label={clock} /&gt;</code>. Month: <code>gap_s={2 * 3600}</code> and a date label. Two small helpers built on <code>showTime()</code> will do: <code>showTime(t).slice(-5)</code> is the clock time, <code>.slice(0, 6)</code> the date.</p>
+<p>Give the component a fixed width (<code>300px</code>) so the popup doesn't jump when you switch tabs.</p>
+<h2 id="63--a-component-inside-a-maplibre-popup">6.3 · A component inside a MapLibre popup</h2>
+<p>MapLibre only knows HTML elements, not Svelte components. So: make an empty <code>&lt;div&gt;</code>, let Svelte <strong>mount</strong> the component into it, give the <code>&lt;div&gt;</code> to the popup, and <strong>unmount</strong> the component when the popup closes (otherwise it keeps listening to the feed forever).</p>
+<p>In <code>MapLibreMap.svelte</code>, replace the old popup:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">onMount</span><span class="p">,</span><span class="w"> </span><span class="nx">mount</span><span class="p">,</span><span class="w"> </span><span class="nx">unmount</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;svelte&#39;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="nx">SensorDetail</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/SensorDetail.svelte&#39;</span><span class="p">;</span>
+
+<span class="nx">m</span><span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="s1">&#39;click&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;sensor-dots&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="nx">e</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="nx">features</span><span class="p">[</span><span class="mf">0</span><span class="p">].</span><span class="nx">properties</span><span class="p">.</span><span class="nx">id</span><span class="p">;</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">target</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">document</span><span class="p">.</span><span class="nx">createElement</span><span class="p">(</span><span class="s1">&#39;div&#39;</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">detail</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">mount</span><span class="p">(</span><span class="nx">SensorDetail</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">target</span><span class="p">,</span><span class="w"> </span><span class="nx">props</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">id</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">});</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">popup</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">maplibregl</span><span class="p">.</span><span class="nx">Popup</span><span class="p">({</span><span class="w"> </span><span class="nx">maxWidth</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;none&#39;</span><span class="w"> </span><span class="p">})</span>
+<span class="w">		</span><span class="p">.</span><span class="nx">setLngLat</span><span class="p">(</span><span class="nx">e</span><span class="p">.</span><span class="nx">features</span><span class="p">[</span><span class="mf">0</span><span class="p">].</span><span class="nx">geometry</span><span class="p">.</span><span class="nx">coordinates</span><span class="p">)</span>
+<span class="w">		</span><span class="p">.</span><span class="nx">setDOMContent</span><span class="p">(</span><span class="nx">target</span><span class="p">);</span>
+<span class="w">	</span><span class="nx">popup</span><span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="s1">&#39;close&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">unmount</span><span class="p">(</span><span class="nx">detail</span><span class="p">));</span>
+<span class="w">	</span><span class="nx">popup</span><span class="p">.</span><span class="nx">addTo</span><span class="p">(</span><span class="nx">m</span><span class="p">);</span>
+<span class="p">});</span>
+</code></pre></div>
+<p><code>popup.on(…)</code> is on its own line on purpose: in MapLibre 6, <code>.on()</code> doesn't return the popup, so it can't be chained like <code>setLngLat(…).setDOMContent(…)</code>.</p>
+<h2 id="check">Check</h2>
+<p>Start the API during the event (<code>REPLAY_START=2026-11-04T15:00 python api/main.py</code>).</p>
+<ul>
+<li>[ ] Click <strong>TBM-15</strong>: <em>Now</em> shows the depth; leave it open for 20 s: it updates.</li>
+<li>[ ] <strong>Day</strong>: a line with the dashed thresholds; the times along the bottom are IST.</li>
+<li>[ ] <strong>Month</strong>: a line with light bars; the 4–5 and 6–8 November events stand out.</li>
+<li>[ ] <strong>TBM-14</strong> (always negative) and a sensor with spikes: the chart stays readable, with the note about readings below −0.5 m.</li>
+<li>[ ] A sensor with long gaps (TBM-02, TBM-23) on <strong>Month</strong>: the line breaks.</li>
+<li>[ ] <strong>Network</strong> tab: the history is requested only when you open a tab, and only once per popup.</li>
+</ul>
+<p>Commit your work.</p>
+<h2 id="stuck">Stuck?</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Try</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The chart is upside down</td>
+<td>SVG's y axis points down: <code>y(v)</code> must use <code>yMax - v</code></td>
+</tr>
+<tr>
+<td>One straight line across the chart, or nothing</td>
+<td><code>t0</code> and <code>t1</code> may be equal, or the points are in seconds and you divide by 1000 somewhere. Log <code>points[0]</code> and <code>points.at(-1)</code></td>
+</tr>
+<tr>
+<td>The popup is empty</td>
+<td><code>mount()</code> needs <code>{ target, props }</code>; did you pass <code>target</code> to <code>setDOMContent</code>?</td>
+</tr>
+<tr>
+<td><code>popup.on(...).addTo is not a function</code></td>
+<td>Don't chain after <code>.on()</code>: see 6.3</td>
+</tr>
+<tr>
+<td>Two charts on screen and one loses its clipping</td>
+<td>The clip path id must be unique per chart: <code>$props.id()</code></td>
+</tr>
+</tbody>
+</table>
+<p>Compare: <code>git diff step-6 -- app/src</code>.</p>
+<details>
+<summary>📄 <code>app/src/lib/SensorChart.svelte</code> as it is at <code>step-6</code></summary>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">THRESHOLDS</span><span class="p">,</span><span class="w"> </span><span class="nx">LEVELS</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/sensors.js&#39;</span><span class="p">;</span>
+
+<span class="w">	</span><span class="c1">// Step 6: a small time-series chart, drawn as plain SVG. No chart library needed:</span>
+<span class="w">	</span><span class="c1">// a chart is just numbers turned into x and y positions.</span>
+<span class="w">	</span><span class="c1">//</span>
+<span class="w">	</span><span class="c1">// points: [{ t, v }]                for single readings (the Day view), or</span>
+<span class="w">	</span><span class="c1">//         [{ t, v, lo, hi }]        for hourly summaries (the Month view): a line for the</span>
+<span class="w">	</span><span class="c1">//                                   mean and a bar from the hour&#39;s lowest to highest reading</span>
+<span class="w">	</span><span class="c1">// gap_s:  a pause longer than this breaks the line, so missing data stays visible</span>
+<span class="w">	</span><span class="c1">// label:  turns a time (Unix seconds) into an axis label</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">points</span><span class="p">,</span><span class="w"> </span><span class="nx">gap_s</span><span class="p">,</span><span class="w"> </span><span class="nx">label</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$props</span><span class="p">();</span>
+
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">W</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">320</span><span class="p">,</span><span class="w"> </span><span class="nx">H</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">150</span><span class="p">;</span><span class="w"> </span><span class="c1">// the drawing size; the SVG scales to its container</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">L</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">36</span><span class="p">,</span><span class="w"> </span><span class="nx">R</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">8</span><span class="p">,</span><span class="w"> </span><span class="nx">T</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">8</span><span class="p">,</span><span class="w"> </span><span class="nx">B</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">22</span><span class="p">;</span><span class="w"> </span><span class="c1">// margins for the axis labels</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">FLOOR_M</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">-</span><span class="mf">0.5</span><span class="p">;</span><span class="w"> </span><span class="c1">// readings below this are cut off (see the note under the chart)</span>
+
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$props</span><span class="p">.</span><span class="nx">id</span><span class="p">();</span><span class="w"> </span><span class="c1">// unique per chart, for the clip path</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">t0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">points</span><span class="p">[</span><span class="mf">0</span><span class="p">]</span><span class="o">?</span><span class="p">.</span><span class="nx">t</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="mf">0</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">t1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">points</span><span class="p">.</span><span class="nx">at</span><span class="p">(</span><span class="o">-</span><span class="mf">1</span><span class="p">)</span><span class="o">?</span><span class="p">.</span><span class="nx">t</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="mf">1</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">values</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">points</span><span class="p">.</span><span class="nx">flatMap</span><span class="p">((</span><span class="nx">p</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">(</span><span class="nx">p</span><span class="p">.</span><span class="nx">hi</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="p">[</span><span class="nx">p</span><span class="p">.</span><span class="nx">lo</span><span class="p">,</span><span class="w"> </span><span class="nx">p</span><span class="p">.</span><span class="nx">hi</span><span class="p">]</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="nx">p</span><span class="p">.</span><span class="nx">v</span><span class="p">])));</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">yMax</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nb">Math</span><span class="p">.</span><span class="nx">max</span><span class="p">(</span><span class="mf">0.6</span><span class="p">,</span><span class="w"> </span><span class="p">...</span><span class="nx">values</span><span class="p">));</span><span class="w"> </span><span class="c1">// always show the 0.5 m danger line</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">yMin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nb">Math</span><span class="p">.</span><span class="nx">max</span><span class="p">(</span><span class="nb">Math</span><span class="p">.</span><span class="nx">min</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="p">...</span><span class="nx">values</span><span class="p">),</span><span class="w"> </span><span class="nx">FLOOR_M</span><span class="p">));</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">clipped</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">values</span><span class="p">.</span><span class="nx">some</span><span class="p">((</span><span class="nx">v</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">v</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="nx">FLOOR_M</span><span class="p">));</span>
+
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">t</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">L</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="p">((</span><span class="nx">t</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">t0</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="p">(</span><span class="nx">t1</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">t0</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="mf">1</span><span class="p">))</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="nx">W</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">L</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">R</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">v</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">T</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="p">((</span><span class="nx">yMax</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">v</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="p">(</span><span class="nx">yMax</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">yMin</span><span class="p">))</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="nx">H</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">T</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">B</span><span class="p">);</span>
+
+<span class="w">	</span><span class="c1">// The line: &quot;M&quot; starts a new piece after a gap, &quot;L&quot; continues it.</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">line</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span>
+<span class="w">		</span><span class="nx">points</span>
+<span class="w">			</span><span class="p">.</span><span class="nx">map</span><span class="p">((</span><span class="nx">p</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nx">i</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="mf">0</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">p</span><span class="p">.</span><span class="nx">t</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">points</span><span class="p">[</span><span class="nx">i</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mf">1</span><span class="p">].</span><span class="nx">t</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="nx">gap_s</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;M&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;L&#39;</span><span class="si">}${</span><span class="nx">x</span><span class="p">(</span><span class="nx">p</span><span class="p">.</span><span class="nx">t</span><span class="p">).</span><span class="nx">toFixed</span><span class="p">(</span><span class="mf">1</span><span class="p">)</span><span class="si">}</span><span class="sb">,</span><span class="si">${</span><span class="nx">y</span><span class="p">(</span><span class="nx">p</span><span class="p">.</span><span class="nx">v</span><span class="p">).</span><span class="nx">toFixed</span><span class="p">(</span><span class="mf">1</span><span class="p">)</span><span class="si">}</span><span class="sb">`</span><span class="p">)</span>
+<span class="w">			</span><span class="p">.</span><span class="nx">join</span><span class="p">(</span><span class="s1">&#39; &#39;</span><span class="p">)</span>
+<span class="w">	</span><span class="p">);</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">yStep</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">yMax</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="mf">1</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="mf">0.25</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">yMax</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="mf">3</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="mf">0.5</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">yTicks</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">.</span><span class="nx">by</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="nx">ticks</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[];</span>
+<span class="w">		</span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">let</span><span class="w"> </span><span class="nx">v</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Math</span><span class="p">.</span><span class="nx">ceil</span><span class="p">(</span><span class="nx">yMin</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="nx">yStep</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">yStep</span><span class="p">;</span><span class="w"> </span><span class="nx">v</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="nx">yMax</span><span class="p">;</span><span class="w"> </span><span class="nx">v</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="nx">yStep</span><span class="p">)</span><span class="w"> </span><span class="nx">ticks</span><span class="p">.</span><span class="nx">push</span><span class="p">(</span><span class="o">+</span><span class="nx">v</span><span class="p">.</span><span class="nx">toFixed</span><span class="p">(</span><span class="mf">2</span><span class="p">));</span>
+<span class="w">		</span><span class="k">return</span><span class="w"> </span><span class="nx">ticks</span><span class="p">;</span>
+<span class="w">	</span><span class="p">});</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">xTicks</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">([</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="mf">2</span><span class="p">,</span><span class="w"> </span><span class="mf">3</span><span class="p">].</span><span class="nx">map</span><span class="p">((</span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">t0</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="p">((</span><span class="nx">t1</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">t0</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">3</span><span class="p">));</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+{#if points.length === 0}
+	<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;empty&quot;</span><span class="p">&gt;</span>No readings in this period.<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+{:else}
+	<span class="p">&lt;</span><span class="nt">svg</span> <span class="na">viewBox</span><span class="o">=</span><span class="s">&quot;0 0 {W} {H}&quot;</span> <span class="na">role</span><span class="o">=</span><span class="s">&quot;img&quot;</span> <span class="na">aria-label</span><span class="o">=</span><span class="s">&quot;Water depth over time&quot;</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">defs</span><span class="p">&gt;</span>
+			<span class="p">&lt;</span><span class="nt">clipPath</span> <span class="na">id</span><span class="o">=</span><span class="s">&quot;plot-{id}&quot;</span><span class="p">&gt;&lt;</span><span class="nt">rect</span> <span class="na">x</span><span class="o">=</span><span class="s">{L}</span> <span class="na">y</span><span class="o">=</span><span class="s">{T}</span> <span class="na">width</span><span class="o">=</span><span class="s">{W</span> <span class="na">-</span> <span class="na">L</span> <span class="na">-</span> <span class="na">R</span><span class="err">}</span> <span class="na">height</span><span class="o">=</span><span class="s">{H</span> <span class="na">-</span> <span class="na">T</span> <span class="na">-</span> <span class="na">B</span><span class="err">}</span> <span class="p">/&gt;&lt;/</span><span class="nt">clipPath</span><span class="p">&gt;</span>
+		<span class="p">&lt;/</span><span class="nt">defs</span><span class="p">&gt;</span>
+
+		<span class="cm">&lt;!-- grid and y axis (metres) --&gt;</span>
+		{#each yTicks as v (v)}
+			<span class="p">&lt;</span><span class="nt">line</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;grid&quot;</span> <span class="na">x1</span><span class="o">=</span><span class="s">{L}</span> <span class="na">x2</span><span class="o">=</span><span class="s">{W</span> <span class="na">-</span> <span class="na">R</span><span class="err">}</span> <span class="na">y1</span><span class="o">=</span><span class="s">{y(v)}</span> <span class="na">y2</span><span class="o">=</span><span class="s">{y(v)}</span> <span class="p">/&gt;</span>
+			<span class="p">&lt;</span><span class="nt">text</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;tick&quot;</span> <span class="na">x</span><span class="o">=</span><span class="s">{L</span> <span class="na">-</span> <span class="na">4</span><span class="err">}</span> <span class="na">y</span><span class="o">=</span><span class="s">{y(v)</span> <span class="err">+</span> <span class="na">3</span><span class="err">}</span> <span class="na">text-anchor</span><span class="o">=</span><span class="s">&quot;end&quot;</span><span class="p">&gt;</span>{v}<span class="p">&lt;/</span><span class="nt">text</span><span class="p">&gt;</span>
+		{/each}
+
+		<span class="cm">&lt;!-- x axis (time) --&gt;</span>
+		{#each xTicks as t, i (i)}
+			<span class="p">&lt;</span><span class="nt">text</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;tick&quot;</span> <span class="na">x</span><span class="o">=</span><span class="s">{x(t)}</span> <span class="na">y</span><span class="o">=</span><span class="s">{H</span> <span class="na">-</span> <span class="na">6</span><span class="err">}</span> <span class="na">text-anchor</span><span class="o">=</span><span class="s">{i</span> <span class="err">===</span> <span class="na">0</span> <span class="err">?</span> <span class="err">&#39;</span><span class="na">start</span><span class="err">&#39;</span> <span class="na">:</span> <span class="na">i </span><span class="o">=</span><span class="s">==</span> <span class="na">3</span> <span class="err">?</span> <span class="err">&#39;</span><span class="na">end</span><span class="err">&#39;</span> <span class="na">:</span> <span class="err">&#39;</span><span class="na">middle</span><span class="err">&#39;}</span><span class="p">&gt;</span>{label(t)}<span class="p">&lt;/</span><span class="nt">text</span><span class="p">&gt;</span>
+		{/each}
+
+		<span class="p">&lt;</span><span class="nt">g</span> <span class="na">clip-path</span><span class="o">=</span><span class="s">&quot;url(#plot-{id})&quot;</span><span class="p">&gt;</span>
+			<span class="cm">&lt;!-- the step 3 thresholds, in their level colours --&gt;</span>
+			{#each THRESHOLDS as th (th.level)}
+				<span class="p">&lt;</span><span class="nt">line</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;threshold&quot;</span> <span class="na">x1</span><span class="o">=</span><span class="s">{L}</span> <span class="na">x2</span><span class="o">=</span><span class="s">{W</span> <span class="na">-</span> <span class="na">R</span><span class="err">}</span> <span class="na">y1</span><span class="o">=</span><span class="s">{y(th.depth_m)}</span> <span class="na">y2</span><span class="o">=</span><span class="s">{y(th.depth_m)}</span> <span class="na">stroke</span><span class="o">=</span><span class="s">{LEVELS[th.level].colour}</span> <span class="p">/&gt;</span>
+			{/each}
+
+			<span class="cm">&lt;!-- Month view: one bar per hour, from its lowest to its highest reading --&gt;</span>
+			{#each points.filter((p) =&gt; p.hi != null) as p (p.t)}
+				<span class="p">&lt;</span><span class="nt">line</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;range&quot;</span> <span class="na">x1</span><span class="o">=</span><span class="s">{x(p.t)}</span> <span class="na">x2</span><span class="o">=</span><span class="s">{x(p.t)}</span> <span class="na">y1</span><span class="o">=</span><span class="s">{y(p.lo)}</span> <span class="na">y2</span><span class="o">=</span><span class="s">{y(p.hi)}</span> <span class="p">/&gt;</span>
+			{/each}
+
+			<span class="p">&lt;</span><span class="nt">path</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;line&quot;</span> <span class="na">d</span><span class="o">=</span><span class="s">{line}</span> <span class="p">/&gt;</span>
+		<span class="p">&lt;/</span><span class="nt">g</span><span class="p">&gt;</span>
+	<span class="p">&lt;/</span><span class="nt">svg</span><span class="p">&gt;</span>
+	{#if clipped}
+		<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;note&quot;</span><span class="p">&gt;</span>Some readings are below {FLOOR_M} m and fall off the chart. Sensor error?<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+	{/if}
+{/if}
+
+<span class="p">&lt;</span><span class="nt">style</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="nt">svg</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="mi">100</span><span class="kt">%</span><span class="p">;</span>
+<span class="w">		</span><span class="k">height</span><span class="p">:</span><span class="w"> </span><span class="kc">auto</span><span class="p">;</span>
+<span class="w">		</span><span class="k">display</span><span class="p">:</span><span class="w"> </span><span class="kc">block</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">grid</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">stroke</span><span class="p">:</span><span class="w"> </span><span class="mh">#e4e4e4</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">tick</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mi">9</span><span class="kt">px</span><span class="p">;</span>
+<span class="w">		</span><span class="k">fill</span><span class="p">:</span><span class="w"> </span><span class="mh">#666</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">threshold</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">stroke-dasharray</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="w">		</span><span class="k">stroke-width</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">range</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">stroke</span><span class="p">:</span><span class="w"> </span><span class="mh">#9ec1df</span><span class="p">;</span>
+<span class="w">		</span><span class="k">stroke-width</span><span class="p">:</span><span class="w"> </span><span class="mf">1.5</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">line</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">fill</span><span class="p">:</span><span class="w"> </span><span class="kc">none</span><span class="p">;</span>
+<span class="w">		</span><span class="k">stroke</span><span class="p">:</span><span class="w"> </span><span class="mh">#17324a</span><span class="p">;</span>
+<span class="w">		</span><span class="k">stroke-width</span><span class="p">:</span><span class="w"> </span><span class="mf">1.3</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">empty</span><span class="o">,</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">note</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">0.8</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#777</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin</span><span class="p">:</span><span class="w"> </span><span class="mf">0.3</span><span class="kt">rem</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">style</span><span class="p">&gt;</span>
+</code></pre></div>
+</details>
+<details>
+<summary>📄 <code>app/src/lib/SensorDetail.svelte</code> as it is at <code>step-6</code></summary>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">feed</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/feed.svelte.js&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">LEVELS</span><span class="p">,</span><span class="w"> </span><span class="nx">showTime</span><span class="p">,</span><span class="w"> </span><span class="nx">showAge</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/sensors.js&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="nx">SensorChart</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/SensorChart.svelte&#39;</span><span class="p">;</span>
+
+<span class="w">	</span><span class="c1">// Step 6: everything about one sensor, in three tabs: the latest value, the last day,</span>
+<span class="w">	</span><span class="c1">// the last month. Used inside the map popup, but it doesn&#39;t know that: it only needs an id.</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">id</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$props</span><span class="p">();</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">tab</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="s1">&#39;now&#39;</span><span class="p">);</span><span class="w"> </span><span class="c1">// &#39;now&#39;, &#39;day&#39; or &#39;month&#39;</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">day</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span><span class="w"> </span><span class="c1">// [{ t, v }]</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">month</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span><span class="w"> </span><span class="c1">// [{ t, v, lo, hi }]</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">error</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span>
+
+<span class="w">	</span><span class="c1">// &quot;Now&quot; comes from the shared feed, so it keeps updating while the popup is open.</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">site</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">feed</span><span class="p">.</span><span class="nx">sites</span><span class="p">.</span><span class="nx">find</span><span class="p">((</span><span class="nx">s</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">id</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">id</span><span class="p">));</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">reading</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">feed</span><span class="p">.</span><span class="nx">readingFor</span><span class="p">(</span><span class="nx">id</span><span class="p">));</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">level</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">feed</span><span class="p">.</span><span class="nx">levels</span><span class="p">[</span><span class="nx">id</span><span class="p">]</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="s1">&#39;stale&#39;</span><span class="p">);</span>
+
+<span class="w">	</span><span class="c1">// Day and Month are fetched when you first open their tab, not before.</span>
+<span class="w">	</span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">show</span><span class="p">(</span><span class="nx">which</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nx">tab</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">which</span><span class="p">;</span>
+<span class="w">		</span><span class="nx">error</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="w">		</span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">which</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;day&#39;</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">!</span><span class="nx">day</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">				</span><span class="kd">const</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="sb">`/api/history/</span><span class="si">${</span><span class="nx">id</span><span class="si">}</span><span class="sb">`</span><span class="p">);</span><span class="w"> </span><span class="c1">// default: the last 24 hours</span>
+<span class="w">				</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">r</span><span class="p">.</span><span class="nx">ok</span><span class="p">)</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="ne">Error</span><span class="p">(</span><span class="sb">`API answered </span><span class="si">${</span><span class="nx">r</span><span class="p">.</span><span class="nx">status</span><span class="si">}</span><span class="sb">`</span><span class="p">);</span>
+<span class="w">				</span><span class="nx">day</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="k">await</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">json</span><span class="p">()).</span><span class="nx">readings</span><span class="p">.</span><span class="nx">map</span><span class="p">((</span><span class="nx">p</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">({</span><span class="w"> </span><span class="nx">t</span><span class="o">:</span><span class="w"> </span><span class="nx">p</span><span class="p">.</span><span class="nx">time</span><span class="p">,</span><span class="w"> </span><span class="nx">v</span><span class="o">:</span><span class="w"> </span><span class="nx">p</span><span class="p">.</span><span class="nx">depth_m</span><span class="w"> </span><span class="p">}));</span>
+<span class="w">			</span><span class="p">}</span>
+<span class="w">			</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">which</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;month&#39;</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">!</span><span class="nx">month</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">				</span><span class="kd">const</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="sb">`/api/history/</span><span class="si">${</span><span class="nx">id</span><span class="si">}</span><span class="sb">/hourly`</span><span class="p">);</span><span class="w"> </span><span class="c1">// default: the last 30 days</span>
+<span class="w">				</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">r</span><span class="p">.</span><span class="nx">ok</span><span class="p">)</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="ne">Error</span><span class="p">(</span><span class="sb">`API answered </span><span class="si">${</span><span class="nx">r</span><span class="p">.</span><span class="nx">status</span><span class="si">}</span><span class="sb">`</span><span class="p">);</span>
+<span class="w">				</span><span class="nx">month</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="k">await</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">json</span><span class="p">()).</span><span class="nx">hours</span><span class="p">.</span><span class="nx">map</span><span class="p">((</span><span class="nx">h</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">({</span><span class="w"> </span><span class="nx">t</span><span class="o">:</span><span class="w"> </span><span class="nx">h</span><span class="p">.</span><span class="nx">time</span><span class="p">,</span><span class="w"> </span><span class="nx">v</span><span class="o">:</span><span class="w"> </span><span class="nx">h</span><span class="p">.</span><span class="nx">mean</span><span class="p">,</span><span class="w"> </span><span class="nx">lo</span><span class="o">:</span><span class="w"> </span><span class="nx">h</span><span class="p">.</span><span class="nx">min</span><span class="p">,</span><span class="w"> </span><span class="nx">hi</span><span class="o">:</span><span class="w"> </span><span class="nx">h</span><span class="p">.</span><span class="nx">max</span><span class="w"> </span><span class="p">}));</span>
+<span class="w">			</span><span class="p">}</span>
+<span class="w">		</span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="nx">e</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="nx">error</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="sb">`Could not load the history: </span><span class="si">${</span><span class="nx">e</span><span class="p">.</span><span class="nx">message</span><span class="si">}</span><span class="sb">`</span><span class="p">;</span>
+<span class="w">		</span><span class="p">}</span>
+<span class="w">	</span><span class="p">}</span>
+
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">clock</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">t</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">showTime</span><span class="p">(</span><span class="nx">t</span><span class="p">).</span><span class="nx">slice</span><span class="p">(</span><span class="o">-</span><span class="mf">5</span><span class="p">);</span><span class="w"> </span><span class="c1">// &quot;14:00&quot;</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">date</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">t</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">showTime</span><span class="p">(</span><span class="nx">t</span><span class="p">).</span><span class="nx">slice</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">6</span><span class="p">);</span><span class="w"> </span><span class="c1">// &quot;04 Nov&quot;</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;detail&quot;</span><span class="p">&gt;</span>
+	<span class="p">&lt;</span><span class="nt">header</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>{id}<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span> · {site?.type}
+		<span class="p">&lt;</span><span class="nt">span</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;level&quot;</span><span class="p">&gt;&lt;</span><span class="nt">i</span> <span class="na">style:background</span><span class="o">=</span><span class="s">{LEVELS[level].colour}</span><span class="p">&gt;&lt;/</span><span class="nt">i</span><span class="p">&gt;</span>{LEVELS[level].label}<span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>
+	<span class="p">&lt;/</span><span class="nt">header</span><span class="p">&gt;</span>
+
+	<span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;tabs&quot;</span> <span class="na">role</span><span class="o">=</span><span class="s">&quot;tablist&quot;</span><span class="p">&gt;</span>
+		{#each [[&#39;now&#39;, &#39;Now&#39;], [&#39;day&#39;, &#39;Day&#39;], [&#39;month&#39;, &#39;Month&#39;]] as [key, name] (key)}
+			<span class="p">&lt;</span><span class="nt">button</span> <span class="na">role</span><span class="o">=</span><span class="s">&quot;tab&quot;</span> <span class="na">aria-selected</span><span class="o">=</span><span class="s">{tab</span> <span class="err">===</span> <span class="na">key</span><span class="err">}</span> <span class="na">class:active</span><span class="o">=</span><span class="s">{tab</span> <span class="err">===</span> <span class="na">key</span><span class="err">}</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{()</span> <span class="err">=</span><span class="p">&gt;</span> show(key)}&gt;{name}<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+		{/each}
+	<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+
+	{#if error}
+		<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;error&quot;</span><span class="p">&gt;</span>{error}<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+	{:else if tab === &#39;now&#39;}
+		<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;big&quot;</span><span class="p">&gt;</span>{reading?.depth_m ?? &#39;–&#39;} <span class="p">&lt;</span><span class="nt">small</span><span class="p">&gt;</span>m<span class="p">&lt;/</span><span class="nt">small</span><span class="p">&gt;&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">p</span><span class="p">&gt;</span>Measured {showTime(reading?.time)} IST<span class="p">&lt;</span><span class="nt">br</span> <span class="p">/&gt;</span>{showAge(reading?.age_s)} ago<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;muted&quot;</span><span class="p">&gt;</span>Sensor mounted {site?.sensor_height_m} m above the street<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+	{:else if tab === &#39;day&#39;}
+		{#if day}
+			<span class="p">&lt;</span><span class="nt">SensorChart</span> <span class="na">points</span><span class="o">=</span><span class="s">{day}</span> <span class="na">gap_s</span><span class="o">=</span><span class="s">{30</span> <span class="err">*</span> <span class="na">60</span><span class="err">}</span> <span class="na">label</span><span class="o">=</span><span class="s">{clock}</span> <span class="p">/&gt;</span>
+			<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;muted&quot;</span><span class="p">&gt;</span>Every reading of the last 24 hours (m)<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+		{:else}
+			<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;muted&quot;</span><span class="p">&gt;</span>Loading …<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+		{/if}
+	{:else if month}
+		<span class="p">&lt;</span><span class="nt">SensorChart</span> <span class="na">points</span><span class="o">=</span><span class="s">{month}</span> <span class="na">gap_s</span><span class="o">=</span><span class="s">{2</span> <span class="err">*</span> <span class="na">3600</span><span class="err">}</span> <span class="na">label</span><span class="o">=</span><span class="s">{date}</span> <span class="p">/&gt;</span>
+		<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;muted&quot;</span><span class="p">&gt;</span>Hourly mean (line) and range (bars), last 30 days (m)<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+	{:else}
+		<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;muted&quot;</span><span class="p">&gt;</span>Loading …<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+	{/if}
+<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">style</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">detail</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="mi">300</span><span class="kt">px</span><span class="p">;</span>
+<span class="w">		</span><span class="k">font-family</span><span class="p">:</span><span class="w"> </span><span class="n">system-ui</span><span class="p">,</span><span class="w"> </span><span class="kc">sans-serif</span><span class="p">;</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">0.85</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nt">header</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">margin-bottom</span><span class="p">:</span><span class="w"> </span><span class="mf">0.4</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">level</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">float</span><span class="p">:</span><span class="w"> </span><span class="kc">right</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nt">i</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">display</span><span class="p">:</span><span class="w"> </span><span class="kc">inline-block</span><span class="p">;</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="mf">0.7</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">height</span><span class="p">:</span><span class="w"> </span><span class="mf">0.7</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">border-radius</span><span class="p">:</span><span class="w"> </span><span class="mi">50</span><span class="kt">%</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin-right</span><span class="p">:</span><span class="w"> </span><span class="mf">0.3</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">vertical-align</span><span class="p">:</span><span class="w"> </span><span class="mf">-0.05</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">tabs</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">display</span><span class="p">:</span><span class="w"> </span><span class="kc">flex</span><span class="p">;</span>
+<span class="w">		</span><span class="k">gap</span><span class="p">:</span><span class="w"> </span><span class="mf">0.25</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin-bottom</span><span class="p">:</span><span class="w"> </span><span class="mf">0.5</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">tabs</span><span class="w"> </span><span class="nt">button</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">flex</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">		</span><span class="k">padding</span><span class="p">:</span><span class="w"> </span><span class="mf">0.2</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">border</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="kt">px</span><span class="w"> </span><span class="kc">solid</span><span class="w"> </span><span class="mh">#c8d3dd</span><span class="p">;</span>
+<span class="w">		</span><span class="k">background</span><span class="p">:</span><span class="w"> </span><span class="mh">#f4f7fa</span><span class="p">;</span>
+<span class="w">		</span><span class="k">border-radius</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="kt">px</span><span class="p">;</span>
+<span class="w">		</span><span class="k">cursor</span><span class="p">:</span><span class="w"> </span><span class="kc">pointer</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">tabs</span><span class="w"> </span><span class="nt">button</span><span class="p">.</span><span class="nc">active</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">background</span><span class="p">:</span><span class="w"> </span><span class="mh">#17324a</span><span class="p">;</span>
+<span class="w">		</span><span class="k">border-color</span><span class="p">:</span><span class="w"> </span><span class="mh">#17324a</span><span class="p">;</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#fff</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nt">p</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">margin</span><span class="p">:</span><span class="w"> </span><span class="mf">0.3</span><span class="kt">rem</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">big</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">1.8</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">font-weight</span><span class="p">:</span><span class="w"> </span><span class="mi">600</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">big</span><span class="w"> </span><span class="nt">small</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">0.9</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">font-weight</span><span class="p">:</span><span class="w"> </span><span class="mi">400</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">muted</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#666</span><span class="p">;</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">0.8</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">error</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#b00020</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">style</span><span class="p">&gt;</span>
+</code></pre></div>
+</details>
+<details>
+<summary>🔍 What changed in <code>app/src/lib/MapLibreMap.svelte</code> from <code>step-5</code> to <code>step-6</code></summary>
+<div class="code" data-lang="diff"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="gd">--- a/app/src/lib/MapLibreMap.svelte</span>
+<span class="gi">+++ b/app/src/lib/MapLibreMap.svelte</span>
+<span class="gu">@@ -1,7 +1,7 @@</span>
+<span class="w"> </span>&lt;script&gt;
+<span class="gd">-	import { onMount } from &#39;svelte&#39;;</span>
+<span class="gi">+	import { onMount, mount, unmount } from &#39;svelte&#39;;</span>
+<span class="w"> </span>	import * as maplibregl from &#39;maplibre-gl&#39;;
+<span class="w"> </span>	import &#39;maplibre-gl/dist/maplibre-gl.css&#39;;
+<span class="gd">-	import { showTime, showAge, LEVELS } from &#39;#lib/sensors.js&#39;;</span>
+<span class="gi">+	import SensorDetail from &#39;#lib/SensorDetail.svelte&#39;;</span>
+<span class="w"> </span>
+<span class="w"> </span>	// Step 2: the sensors on a 2D web map with MapLibre GL.
+<span class="gu">@@ -66,15 +66,16 @@</span>
+<span class="w"> </span>			});
+<span class="w"> </span>
+<span class="gd">-			// Click a sensor: show its latest reading in a popup.</span>
+<span class="gi">+			// Click a sensor: open a popup with the SensorDetail component in it (step 6).</span>
+<span class="gi">+			// MapLibre only knows HTML elements, so we make an empty &lt;div&gt;, let Svelte mount the</span>
+<span class="gi">+			// component into it, and unmount it again when the popup closes.</span>
+<span class="w"> </span>			m.on(&#39;click&#39;, &#39;sensor-dots&#39;, (e) =&gt; {
+<span class="gd">-				const p = e.features[0].properties;</span>
+<span class="gd">-				new maplibregl.Popup()</span>
+<span class="gi">+				const id = e.features[0].properties.id;</span>
+<span class="gi">+				const target = document.createElement(&#39;div&#39;);</span>
+<span class="gi">+				const detail = mount(SensorDetail, { target, props: { id } });</span>
+<span class="gi">+				const popup = new maplibregl.Popup({ maxWidth: &#39;none&#39; })</span>
+<span class="w"> </span>					.setLngLat(e.features[0].geometry.coordinates)
+<span class="gd">-					.setHTML(</span>
+<span class="gd">-						`&lt;strong&gt;${p.id}&lt;/strong&gt; · ${p.type} · &lt;strong&gt;${LEVELS[p.level].label}&lt;/strong&gt;&lt;br&gt;</span>
+<span class="gd">-						 Depth: ${p.depth_m ?? &#39;–&#39;} m&lt;br&gt;</span>
+<span class="gd">-						 Measured: ${showTime(p.time)} IST (${showAge(p.age_s)} ago)`</span>
+<span class="gd">-					)</span>
+<span class="gd">-					.addTo(m);</span>
+<span class="gi">+					.setDOMContent(target);</span>
+<span class="gi">+				popup.on(&#39;close&#39;, () =&gt; unmount(detail)); // (in MapLibre 6, .on() can&#39;t be chained)</span>
+<span class="gi">+				popup.addTo(m);</span>
+<span class="w"> </span>			});
+<span class="w"> </span>			m.on(&#39;mouseenter&#39;, &#39;sensor-dots&#39;, () =&gt; (m.getCanvas().style.cursor = &#39;pointer&#39;));
+</code></pre></div>
+</details>
+<p><strong>Why it was done this way, things to try, questions:</strong> <a href="https://github.com/AlpinistPanda/flood-twin-lab/blob/main/STEPS.md#step-6--sensor-details-a-day-and-a-month-in-the-popup--step-6">STEPS.md, step 6</a>.</p>
+<hr />
+<h2 id="walkthrough-step-6-in-small-pieces-with-all-the-code">Walkthrough: step 6 in small pieces, with all the code</h2>
+<p>Start the API during the event: <code>REPLAY_START=2026-11-04T15:00 python api/main.py</code>. Every piece ends with something to click on the map page.</p>
+<h3 id="6a--a-svelte-component-in-the-popup">6.A · A Svelte component in the popup</h3>
+<p>Create <strong><code>app/src/lib/SensorDetail.svelte</code></strong>, for now with only the sensor's name and its live depth:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">feed</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/feed.svelte.js&#39;</span><span class="p">;</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">id</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$props</span><span class="p">();</span>
+
+<span class="w">	</span><span class="c1">// From the shared feed, so it keeps updating while the popup is open.</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">reading</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">feed</span><span class="p">.</span><span class="nx">readingFor</span><span class="p">(</span><span class="nx">id</span><span class="p">));</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;detail&quot;</span><span class="p">&gt;</span>
+	<span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>{id}<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span>
+	<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;big&quot;</span><span class="p">&gt;</span>{reading?.depth_m ?? &#39;–&#39;} <span class="p">&lt;</span><span class="nt">small</span><span class="p">&gt;</span>m<span class="p">&lt;/</span><span class="nt">small</span><span class="p">&gt;&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">style</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">detail</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="mi">300</span><span class="kt">px</span><span class="p">;</span>
+<span class="w">		</span><span class="k">font-family</span><span class="p">:</span><span class="w"> </span><span class="n">system-ui</span><span class="p">,</span><span class="w"> </span><span class="kc">sans-serif</span><span class="p">;</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">0.85</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">big</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">1.8</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin</span><span class="p">:</span><span class="w"> </span><span class="mf">0.3</span><span class="kt">rem</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">style</span><span class="p">&gt;</span>
+</code></pre></div>
+<p>In <code>MapLibreMap.svelte</code>, change the first import line and add one:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">onMount</span><span class="p">,</span><span class="w"> </span><span class="nx">mount</span><span class="p">,</span><span class="w"> </span><span class="nx">unmount</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;svelte&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="nx">SensorDetail</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/SensorDetail.svelte&#39;</span><span class="p">;</span>
+</code></pre></div>
+<p>and replace the whole <code>m.on('click', 'sensor-dots', …)</code> with:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">			</span><span class="c1">// Click a sensor: open a popup with the SensorDetail component in it.</span>
+<span class="w">			</span><span class="c1">// MapLibre only knows HTML elements, so we make an empty &lt;div&gt;, let Svelte mount the</span>
+<span class="w">			</span><span class="c1">// component into it, and unmount it again when the popup closes.</span>
+<span class="w">			</span><span class="nx">m</span><span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="s1">&#39;click&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;sensor-dots&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="nx">e</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">				</span><span class="kd">const</span><span class="w"> </span><span class="nx">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="nx">features</span><span class="p">[</span><span class="mf">0</span><span class="p">].</span><span class="nx">properties</span><span class="p">.</span><span class="nx">id</span><span class="p">;</span>
+<span class="w">				</span><span class="kd">const</span><span class="w"> </span><span class="nx">target</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">document</span><span class="p">.</span><span class="nx">createElement</span><span class="p">(</span><span class="s1">&#39;div&#39;</span><span class="p">);</span>
+<span class="w">				</span><span class="kd">const</span><span class="w"> </span><span class="nx">detail</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">mount</span><span class="p">(</span><span class="nx">SensorDetail</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">target</span><span class="p">,</span><span class="w"> </span><span class="nx">props</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">id</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">});</span>
+<span class="w">				</span><span class="kd">const</span><span class="w"> </span><span class="nx">popup</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">maplibregl</span><span class="p">.</span><span class="nx">Popup</span><span class="p">({</span><span class="w"> </span><span class="nx">maxWidth</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;none&#39;</span><span class="w"> </span><span class="p">})</span>
+<span class="w">					</span><span class="p">.</span><span class="nx">setLngLat</span><span class="p">(</span><span class="nx">e</span><span class="p">.</span><span class="nx">features</span><span class="p">[</span><span class="mf">0</span><span class="p">].</span><span class="nx">geometry</span><span class="p">.</span><span class="nx">coordinates</span><span class="p">)</span>
+<span class="w">					</span><span class="p">.</span><span class="nx">setDOMContent</span><span class="p">(</span><span class="nx">target</span><span class="p">);</span>
+<span class="w">				</span><span class="nx">popup</span><span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="s1">&#39;close&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">unmount</span><span class="p">(</span><span class="nx">detail</span><span class="p">));</span><span class="w"> </span><span class="c1">// (in MapLibre 6, .on() can&#39;t be chained)</span>
+<span class="w">				</span><span class="nx">popup</span><span class="p">.</span><span class="nx">addTo</span><span class="p">(</span><span class="nx">m</span><span class="p">);</span>
+<span class="w">			</span><span class="p">});</span>
+</code></pre></div>
+<p>The <code>showTime, showAge</code> import in <code>MapLibreMap.svelte</code> is no longer used: remove it.</p>
+<p><strong>You see:</strong> click a sensor: its id and a big depth. Leave the popup open for 20 seconds: the number changes with the feed.</p>
+<h3 id="6b--three-tabs">6.B · Three tabs</h3>
+<p>Replace the script and the HTML of <code>SensorDetail.svelte</code> (keep the style):</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">feed</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/feed.svelte.js&#39;</span><span class="p">;</span>
+<span class="w">	</span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">LEVELS</span><span class="p">,</span><span class="w"> </span><span class="nx">showTime</span><span class="p">,</span><span class="w"> </span><span class="nx">showAge</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;#lib/sensors.js&#39;</span><span class="p">;</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">id</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$props</span><span class="p">();</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">tab</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="s1">&#39;now&#39;</span><span class="p">);</span><span class="w"> </span><span class="c1">// &#39;now&#39;, &#39;day&#39; or &#39;month&#39;</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">site</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">feed</span><span class="p">.</span><span class="nx">sites</span><span class="p">.</span><span class="nx">find</span><span class="p">((</span><span class="nx">s</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">id</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">id</span><span class="p">));</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">reading</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">feed</span><span class="p">.</span><span class="nx">readingFor</span><span class="p">(</span><span class="nx">id</span><span class="p">));</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">level</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">feed</span><span class="p">.</span><span class="nx">levels</span><span class="p">[</span><span class="nx">id</span><span class="p">]</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="s1">&#39;stale&#39;</span><span class="p">);</span>
+
+<span class="w">	</span><span class="kd">function</span><span class="w"> </span><span class="nx">show</span><span class="p">(</span><span class="nx">which</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nx">tab</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">which</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;detail&quot;</span><span class="p">&gt;</span>
+	<span class="p">&lt;</span><span class="nt">header</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">strong</span><span class="p">&gt;</span>{id}<span class="p">&lt;/</span><span class="nt">strong</span><span class="p">&gt;</span> · {site?.type}
+		<span class="p">&lt;</span><span class="nt">span</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;level&quot;</span><span class="p">&gt;&lt;</span><span class="nt">i</span> <span class="na">style:background</span><span class="o">=</span><span class="s">{LEVELS[level].colour}</span><span class="p">&gt;&lt;/</span><span class="nt">i</span><span class="p">&gt;</span>{LEVELS[level].label}<span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>
+	<span class="p">&lt;/</span><span class="nt">header</span><span class="p">&gt;</span>
+
+	<span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;tabs&quot;</span> <span class="na">role</span><span class="o">=</span><span class="s">&quot;tablist&quot;</span><span class="p">&gt;</span>
+		{#each [[&#39;now&#39;, &#39;Now&#39;], [&#39;day&#39;, &#39;Day&#39;], [&#39;month&#39;, &#39;Month&#39;]] as [key, name] (key)}
+			<span class="p">&lt;</span><span class="nt">button</span> <span class="na">role</span><span class="o">=</span><span class="s">&quot;tab&quot;</span> <span class="na">aria-selected</span><span class="o">=</span><span class="s">{tab</span> <span class="err">===</span> <span class="na">key</span><span class="err">}</span> <span class="na">class:active</span><span class="o">=</span><span class="s">{tab</span> <span class="err">===</span> <span class="na">key</span><span class="err">}</span> <span class="na">onclick</span><span class="o">=</span><span class="s">{()</span> <span class="err">=</span><span class="p">&gt;</span> show(key)}&gt;{name}<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+		{/each}
+	<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+
+	{#if tab === &#39;now&#39;}
+		<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;big&quot;</span><span class="p">&gt;</span>{reading?.depth_m ?? &#39;–&#39;} <span class="p">&lt;</span><span class="nt">small</span><span class="p">&gt;</span>m<span class="p">&lt;/</span><span class="nt">small</span><span class="p">&gt;&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">p</span><span class="p">&gt;</span>Measured {showTime(reading?.time)} IST<span class="p">&lt;</span><span class="nt">br</span> <span class="p">/&gt;</span>{showAge(reading?.age_s)} ago<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;muted&quot;</span><span class="p">&gt;</span>Sensor mounted {site?.sensor_height_m} m above the street<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+	{:else}
+		<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;muted&quot;</span><span class="p">&gt;</span>The {tab} chart comes here.<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+	{/if}
+<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+</code></pre></div>
+<p>Add to the style:</p>
+<div class="code" data-lang="css"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="p">.</span><span class="nc">level</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">float</span><span class="p">:</span><span class="w"> </span><span class="kc">right</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="nt">i</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">display</span><span class="p">:</span><span class="w"> </span><span class="kc">inline-block</span><span class="p">;</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="mf">0.7</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">height</span><span class="p">:</span><span class="w"> </span><span class="mf">0.7</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">border-radius</span><span class="p">:</span><span class="w"> </span><span class="mi">50</span><span class="kt">%</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin-right</span><span class="p">:</span><span class="w"> </span><span class="mf">0.3</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">tabs</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">display</span><span class="p">:</span><span class="w"> </span><span class="kc">flex</span><span class="p">;</span>
+<span class="w">		</span><span class="k">gap</span><span class="p">:</span><span class="w"> </span><span class="mf">0.2</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin</span><span class="p">:</span><span class="w"> </span><span class="mf">0.4</span><span class="kt">rem</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">tabs</span><span class="w"> </span><span class="nt">button</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">flex</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">		</span><span class="k">padding</span><span class="p">:</span><span class="w"> </span><span class="mf">0.25</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">border</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="kt">px</span><span class="w"> </span><span class="kc">solid</span><span class="w"> </span><span class="mh">#ccc</span><span class="p">;</span>
+<span class="w">		</span><span class="k">background</span><span class="p">:</span><span class="w"> </span><span class="mh">#f5f5f5</span><span class="p">;</span>
+<span class="w">		</span><span class="k">cursor</span><span class="p">:</span><span class="w"> </span><span class="kc">pointer</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">tabs</span><span class="w"> </span><span class="nt">button</span><span class="p">.</span><span class="nc">active</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">background</span><span class="p">:</span><span class="w"> </span><span class="mh">#17324a</span><span class="p">;</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#fff</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">muted</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#666</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p><strong>You see:</strong> the popup has a header with the level, and three tabs. <em>Day</em> and <em>Month</em> only say where the chart will come.</p>
+<h3 id="6c--load-the-day-only-when-asked">6.C · Load the day, only when asked</h3>
+<p>Add state for the data, and fetch in <code>show</code>:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">day</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span><span class="w"> </span><span class="c1">// [{ t, v }]</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">error</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$state</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span>
+
+<span class="w">	</span><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">show</span><span class="p">(</span><span class="nx">which</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nx">tab</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">which</span><span class="p">;</span>
+<span class="w">		</span><span class="nx">error</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="w">		</span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">which</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;day&#39;</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">!</span><span class="nx">day</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">				</span><span class="kd">const</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="sb">`/api/history/</span><span class="si">${</span><span class="nx">id</span><span class="si">}</span><span class="sb">`</span><span class="p">);</span><span class="w"> </span><span class="c1">// default: the last 24 hours</span>
+<span class="w">				</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">r</span><span class="p">.</span><span class="nx">ok</span><span class="p">)</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="ne">Error</span><span class="p">(</span><span class="sb">`API answered </span><span class="si">${</span><span class="nx">r</span><span class="p">.</span><span class="nx">status</span><span class="si">}</span><span class="sb">`</span><span class="p">);</span>
+<span class="w">				</span><span class="nx">day</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="k">await</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">json</span><span class="p">()).</span><span class="nx">readings</span><span class="p">.</span><span class="nx">map</span><span class="p">((</span><span class="nx">p</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">({</span><span class="w"> </span><span class="nx">t</span><span class="o">:</span><span class="w"> </span><span class="nx">p</span><span class="p">.</span><span class="nx">time</span><span class="p">,</span><span class="w"> </span><span class="nx">v</span><span class="o">:</span><span class="w"> </span><span class="nx">p</span><span class="p">.</span><span class="nx">depth_m</span><span class="w"> </span><span class="p">}));</span>
+<span class="w">			</span><span class="p">}</span>
+<span class="w">		</span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="nx">e</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="nx">error</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="sb">`Could not load the history: </span><span class="si">${</span><span class="nx">e</span><span class="p">.</span><span class="nx">message</span><span class="si">}</span><span class="sb">`</span><span class="p">;</span>
+<span class="w">		</span><span class="p">}</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p>Replace the <code>{:else}</code> part of the HTML with:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>	{:else if error}
+		<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;error&quot;</span><span class="p">&gt;</span>{error}<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+	{:else if tab === &#39;day&#39;}
+		<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;muted&quot;</span><span class="p">&gt;</span>{day ? `${day.length} readings` : &#39;Loading …&#39;}<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+	{:else}
+		<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;muted&quot;</span><span class="p">&gt;</span>The month chart comes here.<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+	{/if}
+</code></pre></div>
+<p>Errors can only happen on <em>Day</em> and <em>Month</em>, so the error check can come after <em>Now</em>.</p>
+<p><strong>You see:</strong> <em>Day</em> says <em>1440 readings</em> (or fewer, for a sensor that reports every 5 minutes). <strong>Network</strong> tab: one <code>history</code> request when you first open <em>Day</em>, none when you open it again.</p>
+<h3 id="6d--the-simplest-chart-a-line">6.D · The simplest chart: a line</h3>
+<p>Create <strong><code>app/src/lib/SensorChart.svelte</code></strong>:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="c1">// A small time-series chart, drawn as plain SVG. No chart library needed:</span>
+<span class="w">	</span><span class="c1">// a chart is just numbers turned into x and y positions.</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">points</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$props</span><span class="p">();</span><span class="w"> </span><span class="c1">// [{ t, v }]</span>
+
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">W</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">320</span><span class="p">,</span><span class="w"> </span><span class="nx">H</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">150</span><span class="p">;</span><span class="w"> </span><span class="c1">// the drawing size; the SVG scales to its container</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">L</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">36</span><span class="p">,</span><span class="w"> </span><span class="nx">R</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">8</span><span class="p">,</span><span class="w"> </span><span class="nx">T</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">8</span><span class="p">,</span><span class="w"> </span><span class="nx">B</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">22</span><span class="p">;</span><span class="w"> </span><span class="c1">// margins for the axis labels</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">t0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">points</span><span class="p">[</span><span class="mf">0</span><span class="p">]</span><span class="o">?</span><span class="p">.</span><span class="nx">t</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="mf">0</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">t1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">points</span><span class="p">.</span><span class="nx">at</span><span class="p">(</span><span class="o">-</span><span class="mf">1</span><span class="p">)</span><span class="o">?</span><span class="p">.</span><span class="nx">t</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="mf">1</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">values</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">points</span><span class="p">.</span><span class="nx">map</span><span class="p">((</span><span class="nx">p</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">p</span><span class="p">.</span><span class="nx">v</span><span class="p">));</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">yMax</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nb">Math</span><span class="p">.</span><span class="nx">max</span><span class="p">(</span><span class="mf">0.6</span><span class="p">,</span><span class="w"> </span><span class="p">...</span><span class="nx">values</span><span class="p">));</span><span class="w"> </span><span class="c1">// always show the 0.5 m danger line</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">yMin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nb">Math</span><span class="p">.</span><span class="nx">min</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="p">...</span><span class="nx">values</span><span class="p">));</span>
+
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">t</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">L</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="p">((</span><span class="nx">t</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">t0</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="p">(</span><span class="nx">t1</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">t0</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="mf">1</span><span class="p">))</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="nx">W</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">L</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">R</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">v</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">T</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="p">((</span><span class="nx">yMax</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">v</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="p">(</span><span class="nx">yMax</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">yMin</span><span class="p">))</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="nx">H</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">T</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">B</span><span class="p">);</span><span class="w"> </span><span class="c1">// SVG&#39;s y grows downwards</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">line</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">points</span><span class="p">.</span><span class="nx">map</span><span class="p">((</span><span class="nx">p</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nx">i</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="mf">0</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;M&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;L&#39;</span><span class="si">}${</span><span class="nx">x</span><span class="p">(</span><span class="nx">p</span><span class="p">.</span><span class="nx">t</span><span class="p">).</span><span class="nx">toFixed</span><span class="p">(</span><span class="mf">1</span><span class="p">)</span><span class="si">}</span><span class="sb">,</span><span class="si">${</span><span class="nx">y</span><span class="p">(</span><span class="nx">p</span><span class="p">.</span><span class="nx">v</span><span class="p">).</span><span class="nx">toFixed</span><span class="p">(</span><span class="mf">1</span><span class="p">)</span><span class="si">}</span><span class="sb">`</span><span class="p">).</span><span class="nx">join</span><span class="p">(</span><span class="s1">&#39; &#39;</span><span class="p">));</span>
+<span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">svg</span> <span class="na">viewBox</span><span class="o">=</span><span class="s">&quot;0 0 {W} {H}&quot;</span> <span class="na">role</span><span class="o">=</span><span class="s">&quot;img&quot;</span> <span class="na">aria-label</span><span class="o">=</span><span class="s">&quot;Water depth over time&quot;</span><span class="p">&gt;</span>
+	<span class="p">&lt;</span><span class="nt">rect</span> <span class="na">x</span><span class="o">=</span><span class="s">{L}</span> <span class="na">y</span><span class="o">=</span><span class="s">{T}</span> <span class="na">width</span><span class="o">=</span><span class="s">{W</span> <span class="na">-</span> <span class="na">L</span> <span class="na">-</span> <span class="na">R</span><span class="err">}</span> <span class="na">height</span><span class="o">=</span><span class="s">{H</span> <span class="na">-</span> <span class="na">T</span> <span class="na">-</span> <span class="na">B</span><span class="err">}</span> <span class="na">fill</span><span class="o">=</span><span class="s">&quot;none&quot;</span> <span class="na">stroke</span><span class="o">=</span><span class="s">&quot;#ddd&quot;</span> <span class="p">/&gt;</span>
+	<span class="p">&lt;</span><span class="nt">path</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;line&quot;</span> <span class="na">d</span><span class="o">=</span><span class="s">{line}</span> <span class="p">/&gt;</span>
+<span class="p">&lt;/</span><span class="nt">svg</span><span class="p">&gt;</span>
+
+<span class="p">&lt;</span><span class="nt">style</span><span class="p">&gt;</span>
+<span class="w">	</span><span class="nt">svg</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">width</span><span class="p">:</span><span class="w"> </span><span class="mi">100</span><span class="kt">%</span><span class="p">;</span>
+<span class="w">		</span><span class="k">height</span><span class="p">:</span><span class="w"> </span><span class="kc">auto</span><span class="p">;</span>
+<span class="w">		</span><span class="k">display</span><span class="p">:</span><span class="w"> </span><span class="kc">block</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">line</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">fill</span><span class="p">:</span><span class="w"> </span><span class="kc">none</span><span class="p">;</span>
+<span class="w">		</span><span class="k">stroke</span><span class="p">:</span><span class="w"> </span><span class="mh">#17324a</span><span class="p">;</span>
+<span class="w">		</span><span class="k">stroke-width</span><span class="p">:</span><span class="w"> </span><span class="mf">1.3</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">&lt;/</span><span class="nt">style</span><span class="p">&gt;</span>
+</code></pre></div>
+<p>In <code>SensorDetail.svelte</code>, import it (<code>import SensorChart from '#lib/SensorChart.svelte';</code>) and show it for <em>Day</em>:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>	{:else if tab === &#39;day&#39;}
+		{#if day}
+			<span class="p">&lt;</span><span class="nt">SensorChart</span> <span class="na">points</span><span class="o">=</span><span class="s">{day}</span> <span class="p">/&gt;</span>
+			<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;muted&quot;</span><span class="p">&gt;</span>Every reading of the last 24 hours (m)<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+		{:else}
+			<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;muted&quot;</span><span class="p">&gt;</span>Loading …<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+		{/if}
+</code></pre></div>
+<p><strong>You see:</strong> click <strong>TBM-15</strong> → <em>Day</em>: a line in a box, rising during the event. No axes yet.</p>
+<h3 id="6e--axes">6.E · Axes</h3>
+<p>Add to the chart's script, a prop for the time labels, and the ticks:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">points</span><span class="p">,</span><span class="w"> </span><span class="nx">label</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$props</span><span class="p">();</span><span class="w"> </span><span class="c1">// label: Unix seconds → text for the time axis</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">yStep</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">yMax</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="mf">1</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="mf">0.25</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">yMax</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="mf">3</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="mf">0.5</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">);</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">yTicks</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">.</span><span class="nx">by</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="kd">const</span><span class="w"> </span><span class="nx">ticks</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[];</span>
+<span class="w">		</span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">let</span><span class="w"> </span><span class="nx">v</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Math</span><span class="p">.</span><span class="nx">ceil</span><span class="p">(</span><span class="nx">yMin</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="nx">yStep</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">yStep</span><span class="p">;</span><span class="w"> </span><span class="nx">v</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="nx">yMax</span><span class="p">;</span><span class="w"> </span><span class="nx">v</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="nx">yStep</span><span class="p">)</span><span class="w"> </span><span class="nx">ticks</span><span class="p">.</span><span class="nx">push</span><span class="p">(</span><span class="o">+</span><span class="nx">v</span><span class="p">.</span><span class="nx">toFixed</span><span class="p">(</span><span class="mf">2</span><span class="p">));</span>
+<span class="w">		</span><span class="k">return</span><span class="w"> </span><span class="nx">ticks</span><span class="p">;</span>
+<span class="w">	</span><span class="p">});</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">xTicks</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">([</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="mf">2</span><span class="p">,</span><span class="w"> </span><span class="mf">3</span><span class="p">].</span><span class="nx">map</span><span class="p">((</span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">t0</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="p">((</span><span class="nx">t1</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">t0</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">3</span><span class="p">));</span>
+</code></pre></div>
+<p>(<code>$derived.by</code> takes a function, for values that need more than one expression.) In the SVG, replace the <code>&lt;rect&gt;</code> with:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>	<span class="cm">&lt;!-- grid and y axis (metres) --&gt;</span>
+	{#each yTicks as v (v)}
+		<span class="p">&lt;</span><span class="nt">line</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;grid&quot;</span> <span class="na">x1</span><span class="o">=</span><span class="s">{L}</span> <span class="na">x2</span><span class="o">=</span><span class="s">{W</span> <span class="na">-</span> <span class="na">R</span><span class="err">}</span> <span class="na">y1</span><span class="o">=</span><span class="s">{y(v)}</span> <span class="na">y2</span><span class="o">=</span><span class="s">{y(v)}</span> <span class="p">/&gt;</span>
+		<span class="p">&lt;</span><span class="nt">text</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;tick&quot;</span> <span class="na">x</span><span class="o">=</span><span class="s">{L</span> <span class="na">-</span> <span class="na">4</span><span class="err">}</span> <span class="na">y</span><span class="o">=</span><span class="s">{y(v)</span> <span class="err">+</span> <span class="na">3</span><span class="err">}</span> <span class="na">text-anchor</span><span class="o">=</span><span class="s">&quot;end&quot;</span><span class="p">&gt;</span>{v}<span class="p">&lt;/</span><span class="nt">text</span><span class="p">&gt;</span>
+	{/each}
+
+	<span class="cm">&lt;!-- x axis (time) --&gt;</span>
+	{#each xTicks as t, i (i)}
+		<span class="p">&lt;</span><span class="nt">text</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;tick&quot;</span> <span class="na">x</span><span class="o">=</span><span class="s">{x(t)}</span> <span class="na">y</span><span class="o">=</span><span class="s">{H</span> <span class="na">-</span> <span class="na">6</span><span class="err">}</span> <span class="na">text-anchor</span><span class="o">=</span><span class="s">{i</span> <span class="err">===</span> <span class="na">0</span> <span class="err">?</span> <span class="err">&#39;</span><span class="na">start</span><span class="err">&#39;</span> <span class="na">:</span> <span class="na">i </span><span class="o">=</span><span class="s">==</span> <span class="na">3</span> <span class="err">?</span> <span class="err">&#39;</span><span class="na">end</span><span class="err">&#39;</span> <span class="na">:</span> <span class="err">&#39;</span><span class="na">middle</span><span class="err">&#39;}</span><span class="p">&gt;</span>{label(t)}<span class="p">&lt;/</span><span class="nt">text</span><span class="p">&gt;</span>
+	{/each}
+</code></pre></div>
+<div class="code" data-lang="css"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="p">.</span><span class="nc">grid</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">stroke</span><span class="p">:</span><span class="w"> </span><span class="mh">#e4e4e4</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">tick</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mi">9</span><span class="kt">px</span><span class="p">;</span>
+<span class="w">		</span><span class="k">fill</span><span class="p">:</span><span class="w"> </span><span class="mh">#666</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p>In <code>SensorDetail.svelte</code>, two label functions in the script:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">clock</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">t</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">showTime</span><span class="p">(</span><span class="nx">t</span><span class="p">).</span><span class="nx">slice</span><span class="p">(</span><span class="o">-</span><span class="mf">5</span><span class="p">);</span><span class="w"> </span><span class="c1">// &quot;14:00&quot;</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">date</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">t</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">showTime</span><span class="p">(</span><span class="nx">t</span><span class="p">).</span><span class="nx">slice</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">6</span><span class="p">);</span><span class="w"> </span><span class="c1">// &quot;04 Nov&quot;</span>
+</code></pre></div>
+<p>and <code>&lt;SensorChart points={day} label={clock} /&gt;</code>.</p>
+<p><strong>You see:</strong> metres on the left, four IST times along the bottom.</p>
+<h3 id="6f--gaps-and-thresholds">6.F · Gaps and thresholds</h3>
+<p><strong>Gaps:</strong> a new prop <code>gap_s</code>. Start a new piece of line after a pause longer than that:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">points</span><span class="p">,</span><span class="w"> </span><span class="nx">gap_s</span><span class="p">,</span><span class="w"> </span><span class="nx">label</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$props</span><span class="p">();</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">line</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span>
+<span class="w">		</span><span class="nx">points</span>
+<span class="w">			</span><span class="p">.</span><span class="nx">map</span><span class="p">((</span><span class="nx">p</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nx">i</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="mf">0</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">p</span><span class="p">.</span><span class="nx">t</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">points</span><span class="p">[</span><span class="nx">i</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mf">1</span><span class="p">].</span><span class="nx">t</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="nx">gap_s</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;M&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;L&#39;</span><span class="si">}${</span><span class="nx">x</span><span class="p">(</span><span class="nx">p</span><span class="p">.</span><span class="nx">t</span><span class="p">).</span><span class="nx">toFixed</span><span class="p">(</span><span class="mf">1</span><span class="p">)</span><span class="si">}</span><span class="sb">,</span><span class="si">${</span><span class="nx">y</span><span class="p">(</span><span class="nx">p</span><span class="p">.</span><span class="nx">v</span><span class="p">).</span><span class="nx">toFixed</span><span class="p">(</span><span class="mf">1</span><span class="p">)</span><span class="si">}</span><span class="sb">`</span><span class="p">)</span>
+<span class="w">			</span><span class="p">.</span><span class="nx">join</span><span class="p">(</span><span class="s1">&#39; &#39;</span><span class="p">)</span>
+<span class="w">	</span><span class="p">);</span>
+</code></pre></div>
+<p>In <code>SensorDetail.svelte</code>: <code>&lt;SensorChart points={day} gap_s={30 * 60} label={clock} /&gt;</code>.</p>
+<p><strong>Thresholds:</strong> import them in the chart, <code>import { THRESHOLDS, LEVELS } from '#lib/sensors.js';</code>, and before the <code>&lt;path&gt;</code>:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>	<span class="cm">&lt;!-- the step 3 thresholds, in their level colours --&gt;</span>
+	{#each THRESHOLDS as th (th.level)}
+		<span class="p">&lt;</span><span class="nt">line</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;threshold&quot;</span> <span class="na">x1</span><span class="o">=</span><span class="s">{L}</span> <span class="na">x2</span><span class="o">=</span><span class="s">{W</span> <span class="na">-</span> <span class="na">R</span><span class="err">}</span> <span class="na">y1</span><span class="o">=</span><span class="s">{y(th.depth_m)}</span> <span class="na">y2</span><span class="o">=</span><span class="s">{y(th.depth_m)}</span> <span class="na">stroke</span><span class="o">=</span><span class="s">{LEVELS[th.level].colour}</span> <span class="p">/&gt;</span>
+	{/each}
+</code></pre></div>
+<div class="code" data-lang="css"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="p">.</span><span class="nc">threshold</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">stroke-dasharray</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="w">		</span><span class="k">stroke-width</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p><strong>You see:</strong> yellow, orange and red dashed lines at 0.15, 0.30 and 0.50 m. You can read at a glance when the sensor crossed them.</p>
+<h3 id="6g--the-month-summaries-and-ranges">6.G · The month: summaries and ranges</h3>
+<p>In <code>SensorDetail.svelte</code>, add <code>let month = $state(null); // [{ t, v, lo, hi }]</code> and, in <code>show</code>, after the <code>day</code> block:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">			</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">which</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;month&#39;</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">!</span><span class="nx">month</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">				</span><span class="kd">const</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="sb">`/api/history/</span><span class="si">${</span><span class="nx">id</span><span class="si">}</span><span class="sb">/hourly`</span><span class="p">);</span><span class="w"> </span><span class="c1">// default: the last 30 days</span>
+<span class="w">				</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">r</span><span class="p">.</span><span class="nx">ok</span><span class="p">)</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="ne">Error</span><span class="p">(</span><span class="sb">`API answered </span><span class="si">${</span><span class="nx">r</span><span class="p">.</span><span class="nx">status</span><span class="si">}</span><span class="sb">`</span><span class="p">);</span>
+<span class="w">				</span><span class="nx">month</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="k">await</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">json</span><span class="p">()).</span><span class="nx">hours</span><span class="p">.</span><span class="nx">map</span><span class="p">((</span><span class="nx">h</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">({</span><span class="w"> </span><span class="nx">t</span><span class="o">:</span><span class="w"> </span><span class="nx">h</span><span class="p">.</span><span class="nx">time</span><span class="p">,</span><span class="w"> </span><span class="nx">v</span><span class="o">:</span><span class="w"> </span><span class="nx">h</span><span class="p">.</span><span class="nx">mean</span><span class="p">,</span><span class="w"> </span><span class="nx">lo</span><span class="o">:</span><span class="w"> </span><span class="nx">h</span><span class="p">.</span><span class="nx">min</span><span class="p">,</span><span class="w"> </span><span class="nx">hi</span><span class="o">:</span><span class="w"> </span><span class="nx">h</span><span class="p">.</span><span class="nx">max</span><span class="w"> </span><span class="p">}));</span>
+<span class="w">			</span><span class="p">}</span>
+</code></pre></div>
+<p>Replace the last <code>{:else}</code> part:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>	{:else if month}
+		<span class="p">&lt;</span><span class="nt">SensorChart</span> <span class="na">points</span><span class="o">=</span><span class="s">{month}</span> <span class="na">gap_s</span><span class="o">=</span><span class="s">{2</span> <span class="err">*</span> <span class="na">3600</span><span class="err">}</span> <span class="na">label</span><span class="o">=</span><span class="s">{date}</span> <span class="p">/&gt;</span>
+		<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;muted&quot;</span><span class="p">&gt;</span>Hourly mean (line) and range (bars), last 30 days (m)<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+	{:else}
+		<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;muted&quot;</span><span class="p">&gt;</span>Loading …<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+	{/if}
+</code></pre></div>
+<p>In the chart, include <code>lo</code> and <code>hi</code> in the scale, and draw a bar per hour <strong>before</strong> the line:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">values</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">points</span><span class="p">.</span><span class="nx">flatMap</span><span class="p">((</span><span class="nx">p</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">(</span><span class="nx">p</span><span class="p">.</span><span class="nx">hi</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="p">[</span><span class="nx">p</span><span class="p">.</span><span class="nx">lo</span><span class="p">,</span><span class="w"> </span><span class="nx">p</span><span class="p">.</span><span class="nx">hi</span><span class="p">]</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="nx">p</span><span class="p">.</span><span class="nx">v</span><span class="p">])));</span>
+</code></pre></div>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>	<span class="cm">&lt;!-- Month view: one bar per hour, from its lowest to its highest reading --&gt;</span>
+	{#each points.filter((p) =&gt; p.hi != null) as p (p.t)}
+		<span class="p">&lt;</span><span class="nt">line</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;range&quot;</span> <span class="na">x1</span><span class="o">=</span><span class="s">{x(p.t)}</span> <span class="na">x2</span><span class="o">=</span><span class="s">{x(p.t)}</span> <span class="na">y1</span><span class="o">=</span><span class="s">{y(p.lo)}</span> <span class="na">y2</span><span class="o">=</span><span class="s">{y(p.hi)}</span> <span class="p">/&gt;</span>
+	{/each}
+</code></pre></div>
+<div class="code" data-lang="css"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="p">.</span><span class="nc">range</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">stroke</span><span class="p">:</span><span class="w"> </span><span class="mh">#9ec1df</span><span class="p">;</span>
+<span class="w">		</span><span class="k">stroke-width</span><span class="p">:</span><span class="w"> </span><span class="mf">1.5</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p><strong>You see:</strong> <em>Month</em> for TBM-15: two clear events (4–5 and 6–8 November), light-blue bars behind the line. Now try <strong>TBM-02</strong>: a broken sensor's spikes squash everything into a flat line.</p>
+<h3 id="6h--keep-broken-readings-from-ruining-the-chart">6.H · Keep broken readings from ruining the chart</h3>
+<p>Never go below −0.5 m, and cut off what falls outside:</p>
+<div class="code" data-lang="js"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">FLOOR_M</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">-</span><span class="mf">0.5</span><span class="p">;</span><span class="w"> </span><span class="c1">// readings below this are cut off</span>
+<span class="w">	</span><span class="kd">const</span><span class="w"> </span><span class="nx">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$props</span><span class="p">.</span><span class="nx">id</span><span class="p">();</span><span class="w"> </span><span class="c1">// unique per chart, for the clip path</span>
+
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">yMin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nb">Math</span><span class="p">.</span><span class="nx">max</span><span class="p">(</span><span class="nb">Math</span><span class="p">.</span><span class="nx">min</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="p">...</span><span class="nx">values</span><span class="p">),</span><span class="w"> </span><span class="nx">FLOOR_M</span><span class="p">));</span>
+<span class="w">	</span><span class="kd">let</span><span class="w"> </span><span class="nx">clipped</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">$derived</span><span class="p">(</span><span class="nx">values</span><span class="p">.</span><span class="nx">some</span><span class="p">((</span><span class="nx">v</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">v</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="nx">FLOOR_M</span><span class="p">));</span>
+</code></pre></div>
+<p>(replace the old <code>yMin</code> line). In the SVG, add a clip path at the top, and wrap the thresholds, the ranges and the line in a group that uses it:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>	<span class="p">&lt;</span><span class="nt">defs</span><span class="p">&gt;</span>
+		<span class="p">&lt;</span><span class="nt">clipPath</span> <span class="na">id</span><span class="o">=</span><span class="s">&quot;plot-{id}&quot;</span><span class="p">&gt;&lt;</span><span class="nt">rect</span> <span class="na">x</span><span class="o">=</span><span class="s">{L}</span> <span class="na">y</span><span class="o">=</span><span class="s">{T}</span> <span class="na">width</span><span class="o">=</span><span class="s">{W</span> <span class="na">-</span> <span class="na">L</span> <span class="na">-</span> <span class="na">R</span><span class="err">}</span> <span class="na">height</span><span class="o">=</span><span class="s">{H</span> <span class="na">-</span> <span class="na">T</span> <span class="na">-</span> <span class="na">B</span><span class="err">}</span> <span class="p">/&gt;&lt;/</span><span class="nt">clipPath</span><span class="p">&gt;</span>
+	<span class="p">&lt;/</span><span class="nt">defs</span><span class="p">&gt;</span>
+	…
+	<span class="p">&lt;</span><span class="nt">g</span> <span class="na">clip-path</span><span class="o">=</span><span class="s">&quot;url(#plot-{id})&quot;</span><span class="p">&gt;</span>
+		<span class="cm">&lt;!-- thresholds, ranges and the line go here --&gt;</span>
+	<span class="p">&lt;/</span><span class="nt">g</span><span class="p">&gt;</span>
+</code></pre></div>
+<p>After the <code>&lt;/svg&gt;</code>, and around the whole chart, an empty case:</p>
+<div class="code" data-lang="svelte"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code>{#if points.length === 0}
+	<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;empty&quot;</span><span class="p">&gt;</span>No readings in this period.<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+{:else}
+	<span class="p">&lt;</span><span class="nt">svg</span> <span class="err">…</span><span class="p">&gt;</span> … <span class="p">&lt;/</span><span class="nt">svg</span><span class="p">&gt;</span>
+	{#if clipped}
+		<span class="p">&lt;</span><span class="nt">p</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;note&quot;</span><span class="p">&gt;</span>Some readings are below {FLOOR_M} m and fall off the chart. Sensor error?<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+	{/if}
+{/if}
+</code></pre></div>
+<div class="code" data-lang="css"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="hl"><code><span class="w">	</span><span class="p">.</span><span class="nc">empty</span><span class="o">,</span>
+<span class="w">	</span><span class="p">.</span><span class="nc">note</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="k">font-size</span><span class="p">:</span><span class="w"> </span><span class="mf">0.8</span><span class="kt">rem</span><span class="p">;</span>
+<span class="w">		</span><span class="k">color</span><span class="p">:</span><span class="w"> </span><span class="mh">#777</span><span class="p">;</span>
+<span class="w">		</span><span class="k">margin</span><span class="p">:</span><span class="w"> </span><span class="mf">0.3</span><span class="kt">rem</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">	</span><span class="p">}</span>
+</code></pre></div>
+<p><strong>You see:</strong> TBM-02 and TBM-14 stay readable, with the note under the chart. TBM-17 (never reported): <em>No readings in this period.</em> That's the reference of this step. Commit.</p>
+<hr />
+<p><a href="07-flood-layers.html">Step 7 · A flood model: raster and vector →</a></p>
+
+    </article>
+    <nav class="next" aria-label="Previous and next"><a class="prev" href="05-pages-layers.html"><span>Previous</span>5 · Pages and layers</a><a class="nxt" href="07-flood-layers.html"><span>Next</span>7 · Flood raster and vector</a></nav>
+  </main>
+  <nav class="toc" aria-label="On this page"><p>On this page</p><ol><li><a href="#the-data">The data</a></li><li><a href="#61--a-chart-is-just-numbers-turned-into-positions">6.1 · A chart is just numbers turned into positions</a></li><li><a href="#62--the-popup-content-appsrclibsensordetailsvelte">6.2 · The popup content: app/src/lib/SensorDetail.svelte</a></li><li><a href="#63--a-component-inside-a-maplibre-popup">6.3 · A component inside a MapLibre popup</a></li><li><a href="#check">Check</a></li><li><a href="#stuck">Stuck?</a></li><li><a href="#walkthrough-step-6-in-small-pieces-with-all-the-code">Walkthrough: step 6 in small pieces, with all the code</a></li></ol></nav>
+</div>
+<script src="assets/guide.js"></script>
+</body>
+</html>
